@@ -4,7 +4,7 @@
 
 ## 中文
 
-这是 [Storage Drawers](https://github.com/jaquadro/StorageDrawers) 的非官方 Horizon 原生模组移植，参考 Java 1.21 版本。模组提供中文和英文资源，包含多种抽屉、压缩抽屉、升级、钥匙、管理器、自动化接口以及镶框桌和自定义外观。
+这是 [Storage Drawers](https://github.com/jaquadro/StorageDrawers) 的非官方 [Horizon](https://github.com/horizon-rust/horizon) 原生模组移植，参考 Java 1.21 版本。模组提供中文和英文资源，包含多种抽屉、压缩抽屉、升级、钥匙、管理器、自动化接口以及镶框桌和自定义外观。
 
 该移植仍在完善，部分行为和兼容性尚需游戏内验证，不能视为与 Java 版完全一致。
 
@@ -26,7 +26,7 @@
 
 ## English
 
-This is an unofficial native Horizon port of [Storage Drawers](https://github.com/jaquadro/StorageDrawers), based on the Java 1.21 version. It includes Chinese and English resources, several drawer types, compacting drawers, upgrades, keys, controllers, automation interfaces, a framing table, and customizable appearances.
+This is an unofficial native [Horizon](https://github.com/horizon-rust/horizon) port of [Storage Drawers](https://github.com/jaquadro/StorageDrawers), based on the Java 1.21 version. It includes Chinese and English resources, several drawer types, compacting drawers, upgrades, keys, controllers, automation interfaces, a framing table, and customizable appearances.
 
 The port is still being developed. Some behavior and compatibility require in-game verification; full parity with the Java version is not guaranteed.
 
