@@ -1,0 +1,26 @@
+{
+  "template": "minecraft:stone",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 4.0,
+    "sounds": "minecraft:oak_planks",
+    "requires_tool": false,
+    "map_color": 0,
+    "render_shape": "ENTITYBLOCK_ANIMATED",
+    "occludes": false
+  },
+  "default_state": {
+    "facing": "north"
+  },
+  "state_properties": {
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    }
+  }
+}

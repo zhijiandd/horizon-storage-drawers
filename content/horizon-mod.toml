@@ -1,0 +1,8 @@
+id="storagedrawers"
+name="储物抽屉"
+version="0.2.7"
+description="储物抽屉 Java 1.21 的 Horizon 移植"
+authors=["Justin Aquadro", "Horizon port contributors"]
+api="0.2"
+side="both"
+capabilities=["registries"]

@@ -1,0 +1,18 @@
+{
+  "version": "0.1.2",
+  "complete_java_121_port": false,
+  "native_build": {
+    "passed": true,
+    "log": "docs/ui-placement-build-final.log"
+  },
+  "current_version_game_tests": "not run; user requested manual testing",
+  "previous_game_tested_version": "0.1.1",
+  "changes": [
+    "original 176x199 drawer screen layout",
+    "seven upgrade slots and drawer stock area",
+    "cursor left/right click and shift upgrade installation",
+    "sneak block placement passes through",
+    "Chinese names and tooltips",
+    "actual quantity and capacity instead of fake display stack counts"
+  ]
+}

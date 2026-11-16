@@ -1,0 +1,6 @@
+[package]
+name="storagedrawers-engine"
+version="0.2.7"
+edition="2024"
+license="MIT"
+publish=false

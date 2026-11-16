@@ -1,0 +1,10 @@
+/target/
+/dist/*
+!/dist/storagedrawers-horizon-0.2.7.hnmod
+!/dist/SHA256SUMS
+/scratch/
+/docs/
+/AGENTS.md
+__pycache__/
+*.pyc
+
