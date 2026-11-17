@@ -5,18 +5,31 @@ import os
 import subprocess
 import tempfile
 import hashlib
+import argparse
+import signal
 from zipfile import ZipFile
 
 root = Path(__file__).resolve().parents[1]
-os.environ.update(HORIZON_LAUNCHER_HOME=r'F:\Games\Horizon\data',
-                  HORIZON_HOME=r'F:\Games\Horizon\game',
-                  HORIZON_LAUNCHER_NO_SELF_UPDATE='1',
-                  TEMP=r'F:\HorizonMods\tooling\temp', TMP=r'F:\HorizonMods\tooling\temp')
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--game-dir', type=Path, default=os.environ.get('HORIZON_HOME'), required='HORIZON_HOME' not in os.environ)
+parser.add_argument('--launcher-home', type=Path, default=os.environ.get('HORIZON_LAUNCHER_HOME'), required='HORIZON_LAUNCHER_HOME' not in os.environ)
+parser.add_argument('--launcher', type=Path, required=True, help='path to the Horizon launcher executable')
+parser.add_argument('--base-version', required=True, help='installed Horizon base version to build against')
+parser.add_argument('--instance', default='horizon')
+args = parser.parse_args()
+game = Path(args.game_dir).expanduser().resolve()
+launcher_home = Path(args.launcher_home).expanduser().resolve()
+launcher = args.launcher.expanduser().resolve()
+if not launcher.is_file() or not game.is_dir() or not launcher_home.is_dir():
+    parser.error('launcher executable, game directory, and launcher home must exist')
+os.environ.update(HORIZON_LAUNCHER_HOME=str(launcher_home), HORIZON_HOME=str(game),
+                  HORIZON_LAUNCHER_NO_SELF_UPDATE='1')
 version = json.loads((root / 'native/horizon-native.json').read_text('utf-8'))['version']
-game = Path(r'F:\Games\Horizon\game')
 flags = dict(line.split(':', 1) for line in (game / 'horizon-mods.txt').read_text('utf-8').splitlines() if ':' in line)
 # An explicit checked bundle folder prevents the launcher's registry fallback
 # from replacing an installed local compatibility patch with an older release.
+(root / 'scratch').mkdir(exist_ok=True)
+(root / 'docs').mkdir(exist_ok=True)
 snapshot = Path(tempfile.mkdtemp(prefix=f'build-all-{version}-', dir=root / 'scratch'))
 packages = []
 for package in sorted((game / 'horizon-native-mods').glob('*.hnmod')):
@@ -34,11 +47,11 @@ for package in sorted((game / 'horizon-native-mods').glob('*.hnmod')):
                 raise ValueError('Unsafe archive path')
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(archive.read(name))
-args = [r'F:\Games\Horizon\launcher\horizon-launcher.exe', 'native-build', str(snapshot),
-        '--instance', 'horizon', '--version', 'nightly-2026-11-13-9f42064',
+command = [str(launcher), 'native-build', str(snapshot),
+        '--instance', args.instance, '--version', args.base_version,
         '--profile', 'dev', '--trust-native-code']
-process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           text=True, encoding='utf-8', errors='replace')
+process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, encoding='utf-8', errors='replace', start_new_session=os.name != 'nt')
 announced_compiling = False
 with (root / f'docs/build-all-{version}.log').open('w', encoding='utf-8') as log:
     for line in process.stdout:
@@ -49,8 +62,11 @@ with (root / f'docs/build-all-{version}.log').open('w', encoding='utf-8') as log
         if 'Compiling the game' in line:
             announced_compiling = True
         if 'was left out' in line or '已略过' in line:
-            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.name == 'nt':
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
             raise SystemExit('Stopped: every installed mod must be included.')
 result = process.wait()
 if result == 0:

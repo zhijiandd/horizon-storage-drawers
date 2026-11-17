@@ -1,7 +1,7 @@
 // Shared item payload/recipe implementation, compiled into both game and library.
 use horizon_items::{items::ItemStack,item_nbt::{item_from_nbt,item_to_nbt}};
 use horizon_world::nbt::{Compound,Tag};
-use storagedrawers_engine as sd;
+use horizon_client::menu::sd_rules::engine as sd;
 
 pub(crate) fn kind(id:&str)->&str{id.strip_prefix("storagedrawers:").unwrap_or("")}
 pub(crate) fn drawer(id:&str)->bool{kind(id).contains("drawers_")}

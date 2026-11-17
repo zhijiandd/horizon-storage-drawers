@@ -1,15 +1,22 @@
 """Package the single-file native mod; Mojang resources and compiled game stay local."""
 from pathlib import Path
 from zipfile import ZipFile,ZIP_DEFLATED
-import hashlib,json,shutil
+import argparse,hashlib,json,shutil
 ROOT=Path(__file__).resolve().parents[1]
 BUNDLE=ROOT/'native/mixins/storagedrawers'
-DIST=ROOT/'dist';DIST.mkdir(exist_ok=True)
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--output-dir',type=Path,default=ROOT/'dist',help='destination for the package and SHA256SUMS')
+parser.add_argument('--overwrite',action='store_true',help='replace an existing package at the destination')
+args=parser.parse_args()
+DIST=args.output_dir.expanduser().resolve();DIST.mkdir(parents=True,exist_ok=True)
 manifest=json.loads((ROOT/'native/horizon-native.json').read_text(encoding='utf-8'))
 version=manifest['version']
-shutil.copy2(ROOT.parent/'references/StorageDrawers-1.21/LICENSE',BUNDLE/'LICENSE-StorageDrawers.txt')
-shutil.copy2(ROOT/'README.md',BUNDLE/'README.md')
 path=DIST/f'storagedrawers-horizon-{version}.hnmod'
+if path.exists() and not args.overwrite:
+    parser.error(f'{path} already exists; use a new --output-dir or explicitly pass --overwrite')
+shutil.copy2(ROOT/'LICENSE-StorageDrawers.txt',BUNDLE/'LICENSE-StorageDrawers.txt')
+shutil.copy2(ROOT/'LICENSE',BUNDLE/'LICENSE')
+shutil.copy2(ROOT/'README.md',BUNDLE/'README.md')
 with ZipFile(path,'w',ZIP_DEFLATED,compresslevel=9) as archive:
     archive.write(ROOT/'native/horizon-native.json','horizon-native.json')
     for file in sorted(BUNDLE.rglob('*')):

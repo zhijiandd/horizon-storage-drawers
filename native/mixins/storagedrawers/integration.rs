@@ -1,6 +1,7 @@
-// Pinned game adapter. Saved core state is authoritative; item slots are projections only.
+// Hand-maintained game adapter; generated hook helpers are in separate files.
+// Saved core state is authoritative; item slots are projections only.
 use super::Game;
-use storagedrawers_engine as sd;
+use horizon_client::menu::sd_rules::engine as sd;
 use horizon_client::{containers::{BlockEntity,ModBlockEntity,ModContainer},items::ItemStack,text::Text};
 use horizon_world::nbt::{Compound,Tag};
 use horizon_core::geometry::Direction;
@@ -46,7 +47,7 @@ struct MenuDrag{kind:i32,slots:Vec<i32>,source:ItemStack}
 fn ours(id:&str)->bool{id.starts_with("storagedrawers:")}
 fn name_at(game:&Game<'_>,pos:Pos)->String{game.native_block(pos)}
 fn kind(block:&str)->&str{block.strip_prefix("storagedrawers:").unwrap_or("")}
-fn drawer(block:&str)->bool{kind(block).contains("drawers_")}
+pub(super) fn drawer(block:&str)->bool{kind(block).contains("drawers_")}
 fn controller(block:&str)->bool{matches!(kind(block),"controller"|"framed_controller")}
 fn port(block:&str)->bool{matches!(kind(block),"controller_io"|"framed_controller_io")}
 fn trim(block:&str)->bool{kind(block).ends_with("_trim")}
@@ -57,7 +58,7 @@ fn slots(block:&str)->usize{block.rsplit('_').next().and_then(|s|s.parse().ok())
 fn entity<'a>(game:&'a Game<'_>,pos:Pos)->Option<&'a ModBlockEntity>{
     match game.world.block_entities.get(&(pos[0],pos[1],pos[2])){Some(BlockEntity::Mod(m))if ours(&m.id)=>Some(m),_=>None}
 }
-fn group(entity:&ModBlockEntity)->Result<sd::Group,sd::Error>{
+pub(super) fn group(entity:&ModBlockEntity)->Result<sd::Group,sd::Error>{
     match entity.nbt.get(&SAVE.into()){Some(Tag::ByteArray(bytes))=>sd::codec::decode(bytes),_=>Err(sd::Error::InvalidData)}
 }
 fn block_name(entity:&ModBlockEntity)->String{
@@ -1293,27 +1294,6 @@ fn count_text(n:u64)->String{
     if n>=1_000_000_000{format!("{:.1}G",n as f64/1e9)}else if n>=100_000_000{format!("{:.0}M",n as f64/1e6)}
     else if n>=1_000_000{format!("{:.1}M",n as f64/1e6)}else if n>=100_000{format!("{:.0}K",n as f64/1e3)}
     else if n>=10_000{format!("{:.1}K",n as f64/1e3)}else{n.to_string()}
-}
-
-fn redstone_analog()->bool{feature_config()["redstone_analog_output"].as_bool().unwrap_or(true)}
-pub(super) fn signal_source(level:&super::GameLevel<'_>,state:horizon_world::registry::BlockStateId,source:&mut bool){
-    if level.registry.state(state).is_some_and(|s|drawer(&s.name)){*source=!redstone_analog();}
-}
-pub(super) fn has_analog(level:&super::GameLevel<'_>,state:horizon_world::registry::BlockStateId,output:&mut bool){
-    if level.registry.state(state).is_some_and(|s|drawer(&s.name)){*output=true;}
-}
-pub(super) fn signal(level:&super::GameLevel<'_>,pos:Pos,face:Direction,direct:bool,signal:&mut i32){
-    let state=level.world.block(pos[0],pos[1],pos[2]);
-    if !level.registry.state(state).is_some_and(|s|drawer(&s.name)){return;}
-    *signal=0;if redstone_analog()||direct&&face!=Direction::Up{return;}
-    analog(level,pos,signal);
-}
-pub(super) fn analog(level:&super::GameLevel<'_>,pos:Pos,signal:&mut i32){
-    let state=level.world.block(pos[0],pos[1],pos[2]);
-    if !level.registry.state(state).is_some_and(|s|drawer(&s.name)){return;}*signal=0;
-    if let Some(BlockEntity::Mod(m))=level.world.block_entities.get(&(pos[0],pos[1],pos[2])){
-        if drawer(&m.id){if let Ok(g)=group(m){*signal=i32::from(g.redstone());}}
-    }
 }
 
 pub(super) fn before_remove(level:&mut super::GameLevel<'_>,pos:horizon_core::position::BlockPos,old:horizon_world::registry::BlockStateId){

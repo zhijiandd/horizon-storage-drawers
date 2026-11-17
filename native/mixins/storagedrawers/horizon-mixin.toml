@@ -12,6 +12,12 @@ name="sd_integration"
 source="integration.rs"
 
 [[module]]
+id="redstone"
+file="crates/horizon-client/src/game.rs"
+name="sd_redstone"
+source="redstone.rs"
+
+[[module]]
 id="geometry"
 file="crates/horizon-client/src/game.rs"
 name="sd_geometry"
@@ -59,10 +65,6 @@ file="crates/horizon-client/src/menu.rs"
 name="sd_rules"
 source="menu_rules.rs"
 visibility="pub"
-
-[[crate]]
-id="engine"
-path="engine"
 
 [[crate]]
 id="recipe_engine"

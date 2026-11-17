@@ -6,7 +6,7 @@ license = "MIT"
 publish = false
 
 [lib]
-path = "src/lib.rs"
+path = "native/mixins/storagedrawers/recipe_engine/src/lib.rs"
 
 [workspace]
 

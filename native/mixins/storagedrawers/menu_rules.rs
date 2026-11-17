@@ -3,6 +3,7 @@ use super::{Menu,Kind,Input,Env,MAIN,PLAYER};
 use crate::{items::ItemStack,crafting::sd_items as data};
 use horizon_world::nbt::{self,NamedTag,Tag,Limits};
 use storagedrawers_recipe_engine as sd;
+pub use storagedrawers_recipe_engine as engine;
 use std::{cell::RefCell,collections::BTreeSet};
 
 #[derive(Clone)]

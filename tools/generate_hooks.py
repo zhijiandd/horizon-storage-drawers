@@ -6,6 +6,7 @@ B=ROOT/'native/mixins/storagedrawers'
 REV='9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0'
 lines=['[mod]','id="storagedrawers"','version="0.2.7"','', '[compatibility]',f'horizon_revision="{REV}"','',
     '[[module]]','id="integration"','file="crates/horizon-client/src/game.rs"','name="sd_integration"','source="integration.rs"','',
+    '[[module]]','id="redstone"','file="crates/horizon-client/src/game.rs"','name="sd_redstone"','source="redstone.rs"','',
     '[[module]]','id="geometry"','file="crates/horizon-client/src/game.rs"','name="sd_geometry"','source="geometry.rs"','',
     '[[module]]','id="block_templates"','file="crates/horizon-client/src/mod_content.rs"','name="sd_block_templates"','source="block_templates.rs"','',
     '[[module]]','id="stack_limits"','file="crates/horizon-client/src/lan/menu.rs"','name="sd_stack_limits"','source="stack_limits.rs"','',
@@ -14,7 +15,6 @@ lines=['[mod]','id="storagedrawers"','version="0.2.7"','', '[compatibility]',f'h
     '[[module]]','id="items"','file="crates/horizon-client/src/game.rs"','name="sd_items"','source="items.rs"','',
     '[[module]]','id="recipe_items"','file="crates/horizon-client/src/crafting.rs"','name="sd_items"','source="recipe_items.rs"','',
     '[[module]]','id="client_ui_rules"','file="crates/horizon-client/src/menu.rs"','name="sd_rules"','source="menu_rules.rs"','visibility="pub"','',
-    '[[crate]]','id="engine"','path="engine"','',
     '[[crate]]','id="recipe_engine"','path="recipe_engine"','dependent="horizon-client-lib"','']
 
 def inject(name,target,args,body,returns=None,hook=False,kind='HEAD',output=None):
@@ -256,18 +256,18 @@ inject('item_appearance',"horizon_client::game::item_draw::Game<'_>::resolve_ite
 std::ops::ControlFlow::Continue(())''','ItemRenderState')
 inject('signal','block_signal',[('level',"&crate::game::GameLevel<'_>",'&*self'),('pos','horizon_core::position::BlockPos','pos'),
     ('face','horizon_core::geometry::Direction','face'),('direct','bool','direct'),('signal','&mut i32','&mut *signal')],
-    'crate::game::sd_integration::signal(level,[pos.x,pos.y,pos.z],face,direct,signal);',hook=True)
+    'crate::game::sd_redstone::signal(level,[pos.x,pos.y,pos.z],face,direct,signal);',hook=True)
 level=('level',"&crate::game::GameLevel<'_>",'&*self')
 state=('state','horizon_world::registry::BlockStateId','state')
 inject('signal_source',"horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source",[
     level,state,('source','&mut bool','&mut *source')],
-    'crate::game::sd_integration::signal_source(level,state,source);')
+    'crate::game::sd_redstone::signal_source(level,state,source);')
 inject('has_analog',"horizon_client::game::native_hooks::GameLevel<'_>::native_has_analog_output",[
     level,state,('output','&mut bool','&mut *output')],
-    'crate::game::sd_integration::has_analog(level,state,output);')
+    'crate::game::sd_redstone::has_analog(level,state,output);')
 inject('analog',"horizon_client::game::native_hooks::GameLevel<'_>::native_analog_output",[
     level,('pos','horizon_core::position::BlockPos','pos'),('output','&mut i32','&mut *output')],
-    'crate::game::sd_integration::analog(level,[pos.x,pos.y,pos.z],output);')
+    'crate::game::sd_redstone::analog(level,[pos.x,pos.y,pos.z],output);')
 inject('item_contact',"horizon_client::game::native_hooks::Game<'_>::native_block_entity_inside",[
     ('dimension','&str','dimension'),('pos','[i32;3]','position'),('kind','&str','kind'),('entity','i32','entity')],
     'if kind=="minecraft:item"{crate::game::sd_integration::item_contact(dimension,pos,entity as u32);}')

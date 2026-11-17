@@ -1,9 +1,9 @@
 """Generate the distributable native bundle and vanilla-format content assets."""
 from pathlib import Path
-import json, re, shutil, zipfile, hashlib
+import argparse, json, os, re, shutil, zipfile, hashlib
 
 ROOT=Path(__file__).resolve().parents[1]
-REF=ROOT.parent/'references'/'StorageDrawers-1.21'
+REF=Path(os.environ.get('STORAGEDRAWERS_JAVA_SOURCE', ROOT.parent/'references'/'StorageDrawers-1.21')).expanduser().resolve()
 JAVA=REF/'common/src/main/java/com/jaquadro/minecraft/storagedrawers'
 RES=REF/'common/src/main/resources'
 BUNDLE=ROOT/'native/mixins/storagedrawers'
@@ -28,14 +28,12 @@ def dump(path,obj):
 
 def generate():
     BUNDLE.mkdir(parents=True,exist_ok=True)
-    engine=BUNDLE/'engine'
-    engine.mkdir(exist_ok=True)
-    (engine/'Cargo.toml').write_text(f'[package]\nname="storagedrawers-engine"\nversion="{VERSION}"\nedition="2024"\nlicense="MIT"\npublish=false\n',encoding='utf-8')
-    shutil.copytree(ROOT/'src',engine/'src',dirs_exist_ok=True)
-    recipe_engine=BUNDLE/'recipe_engine';recipe_engine.mkdir(exist_ok=True)
-    (recipe_engine/'Cargo.toml').write_text(f'[package]\nname="storagedrawers-recipe-engine"\nversion="{VERSION}"\nedition="2024"\nlicense="MIT"\npublish=false\n',encoding='utf-8')
-    shutil.copytree(ROOT/'src',recipe_engine/'src',dirs_exist_ok=True)
-    (BUNDLE/'recipe_items.rs').write_text((BUNDLE/'items.rs').read_text('utf-8').replace('use storagedrawers_engine as sd;','use storagedrawers_recipe_engine as sd;'),encoding='utf-8')
+    if not (JAVA/'core/ModItems.java').is_file() or not (RES/'assets/storagedrawers').is_dir():
+        raise SystemExit(f'Storage Drawers Java source not found at {REF}; set STORAGEDRAWERS_JAVA_SOURCE or pass --java-source.')
+    source=(BUNDLE/'items.rs').read_text('utf-8')
+    marker='use horizon_client::menu::sd_rules::engine as sd;'
+    if source.count(marker)!=1:raise SystemExit('Expected one shared engine import in items.rs')
+    (BUNDLE/'recipe_items.rs').write_text(source.replace(marker,'use storagedrawers_recipe_engine as sd;'),encoding='utf-8')
     CONTENT.mkdir(exist_ok=True)
     (CONTENT/'horizon-mod.toml').write_text(f'id="storagedrawers"\nname="储物抽屉"\nversion="{VERSION}"\ndescription="储物抽屉 Java 1.21 的 Horizon 移植"\nauthors=["Justin Aquadro", "Horizon port contributors"]\napi="0.2"\nside="both"\ncapabilities=["registries"]\n',encoding='utf-8')
     shutil.copytree(RES/'assets/storagedrawers/textures',CONTENT/'assets/storagedrawers/textures',dirs_exist_ok=True)
@@ -318,5 +316,12 @@ def generate():
             if path.is_file():archive.write(path,path.relative_to(CONTENT).as_posix())
     print(f'Generated {len(blocks)} blocks, {len(items)} items, {len(converted)} ordinary recipes and {len(unsupported)} native custom recipes.')
 
-if __name__=='__main__':generate()
+if __name__=='__main__':
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--java-source',type=Path,default=REF,help='Storage Drawers Java source checkout (or STORAGEDRAWERS_JAVA_SOURCE)')
+    args=parser.parse_args()
+    REF=args.java_source.expanduser().resolve()
+    JAVA=REF/'common/src/main/java/com/jaquadro/minecraft/storagedrawers'
+    RES=REF/'common/src/main/resources'
+    generate()
 
