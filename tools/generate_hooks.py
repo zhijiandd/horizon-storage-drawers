@@ -4,8 +4,10 @@ import json
 ROOT=Path(__file__).resolve().parents[1]
 B=ROOT/'native/mixins/storagedrawers'
 REV='9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0'
-lines=['[mod]','id="storagedrawers"','version="0.2.7"','', '[compatibility]',f'horizon_revision="{REV}"','',
+lines=['[mod]','id="storagedrawers"','version="0.2.8"','', '[compatibility]',f'horizon_revision="{REV}"','',
     '[[module]]','id="integration"','file="crates/horizon-client/src/game.rs"','name="sd_integration"','source="integration.rs"','',
+    '[[module]]','id="compacting"','file="crates/horizon-client/src/game.rs"','name="sd_compacting"','source="compacting.rs"','',
+    '[[module]]','id="lighting"','file="crates/horizon-client/src/game.rs"','name="sd_lighting"','source="lighting.rs"','',
     '[[module]]','id="redstone"','file="crates/horizon-client/src/game.rs"','name="sd_redstone"','source="redstone.rs"','',
     '[[module]]','id="geometry"','file="crates/horizon-client/src/game.rs"','name="sd_geometry"','source="geometry.rs"','',
     '[[module]]','id="block_templates"','file="crates/horizon-client/src/mod_content.rs"','name="sd_block_templates"','source="block_templates.rs"','',

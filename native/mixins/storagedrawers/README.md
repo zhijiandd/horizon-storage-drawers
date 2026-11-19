@@ -10,15 +10,19 @@
 
 ### 安装
 
-1. 下载 [Storage Drawers 0.2.7 模组文件](dist/storagedrawers-horizon-0.2.7.hnmod)。
+1. 下载 [Storage Drawers 0.2.8 模组文件](dist/storagedrawers-horizon-0.2.8.hnmod)。
 2. 将文件放入 Horizon 游戏目录下的 `horizon-native-mods` 文件夹。
 3. 在 Horizon 启动器中启用该模组并进行原生构建，然后启动游戏。
 
 本版本针对 Horizon `9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0` 构建；其他提交的兼容性未经验证，可能需要重新适配。`.hnmod` 包含原生代码和资源，首次安装或更改模组组合时需要构建。
 
+0.2.8 仍使用旧式源码注入格式。只支持独立 SDK 项目的新版启动器不能直接编译此包，迁移到新 SDK 尚未完成。已有兼容的编译版本可保留使用；开发构建须指定支持 `horizon-mixin.toml` 的旧版构建工具，无需替换日常启动器。
+
 ### 使用与配置
 
 抽屉支持使用升级、钥匙和管理器；镶框桌可使用方块材料制作自定义外观。配置文件位于游戏目录下的 `horizon-mods/.horizon-mod-data/storagedrawers/features.json`。
+
+新增配置和默认值见 [配置说明](CONFIGURATION.md)。
 
 ### 开发
 
@@ -40,11 +44,13 @@ The port is still being developed. Some behavior and compatibility require in-ga
 
 ### Installation
 
-1. Download [Storage Drawers 0.2.7](dist/storagedrawers-horizon-0.2.7.hnmod).
+1. Download [Storage Drawers 0.2.8](dist/storagedrawers-horizon-0.2.8.hnmod).
 2. Place the file in the `horizon-native-mods` folder in your Horizon game directory.
 3. Enable the mod in the Horizon launcher, run a native build, and start the game.
 
 This version was built for Horizon revision `9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0`. Compatibility with other revisions has not been verified and may require changes. The `.hnmod` contains native code and resources; a build is needed on initial installation or when changing the native mod set.
+
+0.2.8 uses legacy source mixins. SDK-only launchers cannot compile this package; SDK migration is pending. Use a compatible legacy build tool explicitly for development without replacing the installed launcher.
 
 ### Usage and configuration
 

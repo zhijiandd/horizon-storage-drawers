@@ -97,14 +97,67 @@ fn compact()->Group{Group::compacting(vec![
 }
 #[test]fn ownership_and_suspend_do_not_grant_players_administrator_access(){
     let mut g=Group::standard(1,false).unwrap();g.use_key(Key::Personal,10).unwrap();
-    assert_eq!(g.use_key(Key::UnlockPersonal,20),Err(Error::Denied));assert_eq!(g.insert(0,&stack(1),Access::Player(20),false),Err(Error::Denied));
+    assert_eq!(g.use_key(Key::Lock,20),Err(Error::Denied));assert_eq!(g.insert(0,&stack(1),Access::Player(20),false),Err(Error::Denied));
     g.use_key(Key::Suspend,10).unwrap();assert_eq!(g.insert(0,&stack(1),Access::Automation,false),Err(Error::Suspended));
     assert!(g.insert(0,&stack(1),Access::Player(10),false).is_ok());
+}
+#[test]fn administrator_unlock_key_clears_other_owners_and_trust(){
+    let mut g=Group::standard(1,false).unwrap();g.use_key(Key::Personal,10).unwrap();g.attributes.trusted.insert(30);
+    g.use_key(Key::UnlockPersonal,20).unwrap();assert_eq!(g.attributes.owner,None);assert!(g.attributes.trusted.is_empty());
+    assert!(g.insert(0,&stack(1),Access::Player(20),false).is_ok());
+}
+#[test]fn locked_empty_standard_and_unassigned_compacting_drawers_reject_automation(){
+    let mut g=Group::standard(2,false).unwrap();g.use_key(Key::Lock,7).unwrap();let before=g.clone();
+    assert!(!g.can_initialize(Access::Automation));assert!(g.can_initialize(Access::Player(7)));
+    assert_eq!(g.insert(0,&stack(1),Access::Automation,true),Err(Error::Denied));assert_eq!(g,before);
+    g.insert(1,&stack(1),Access::Player(7),false).unwrap();
+    g.insert(1,&stack(1),Access::Automation,false).unwrap();assert_eq!(g.count(1),2);
+    assert!(g.item(0).is_none());
+}
+#[test]fn multi_slot_intake_tries_slots_after_a_full_match_and_simulates_without_changes(){
+    let mut g=Group::standard(2,false).unwrap();g.insert(0,&stack(1024),Access::Automation,false).unwrap();
+    g.insert(1,&stack(1000),Access::Automation,false).unwrap();let before=g.clone();
+    assert_eq!(g.insert_all(&[0,1],&stack(40),Access::Automation,true,&|_,_|false),Inserted{stored:24,voided:0});
+    assert_eq!(g,before);assert_eq!(g.insert_all(&[0,1],&stack(40),Access::Automation,false,&|_,_|false).stored,24);
+    assert_eq!((g.count(0),g.count(1)),(1024,1024));
+}
+#[test]fn multi_slot_void_intake_fills_all_physical_space_before_discarding_overflow(){
+    let mut g=Group::standard(2,false).unwrap();g.add_upgrade(Upgrade::Void,Access::Administrator).unwrap();
+    g.insert(0,&stack(1024),Access::Automation,false).unwrap();
+    assert_eq!(g.insert_all(&[0,1],&stack(1100),Access::Automation,false,&|_,_|false),Inserted{stored:1024,voided:76});
+    assert_eq!(g.count(1),1024);
+}
+#[test]fn balance_id_writes_registered_name_and_reads_the_legacy_typo(){
+    assert_eq!(Upgrade::Balance.id(),"balance_fill_upgrade");
+    assert_eq!(Upgrade::from_id("storagedrawers:balanced_fill_upgrade"),Some(Upgrade::Balance));
+    let mut g=Group::standard(1,false).unwrap();g.upgrades.push(Upgrade::Balance);
+    assert_eq!(codec::decode(&codec::encode(&g).unwrap()).unwrap(),g);
+}
+#[test]fn denied_items_are_rejected_by_the_common_storage_entry(){
+    let mut g=Group::standard(1,false).unwrap();let before=g.clone();
+    let item=Stack{item:ItemKey::plain("storagedrawers:creative_vending_upgrade",64),count:1};
+    assert_eq!(g.insert(0,&item,Access::Player(1),false),Err(Error::Incompatible));
+    assert_eq!(g.insert_all(&[0],&item,Access::Automation,false,&|_,_|false).accepted(),0);assert_eq!(g,before);
+}
+#[test]fn vending_and_suspended_groups_do_not_rebalance_real_stock(){
+    let mut g=Group::standard(2,false).unwrap();g.insert(0,&stack(20),Access::Automation,false).unwrap();
+    g.insert(1,&stack(4),Access::Automation,false).unwrap();g.upgrades.extend([Upgrade::Balance,Upgrade::CreativeVending]);
+    g.balance();assert_eq!((g.drawers[0].count,g.drawers[1].count),(20,4));
+    g.upgrades.pop();g.attributes.suspended=true;g.insert(0,&stack(2),Access::Player(1),false).unwrap();
+    assert_eq!((g.drawers[0].count,g.drawers[1].count),(22,4));
+}
+#[test]fn inventory_above_a_changed_capacity_remains_readable_and_can_be_extracted(){
+    let mut g=Group::standard(1,false).unwrap();g.drawers[0]=Drawer{item:Some(stone()),count:3000,detached:false};
+    let mut loaded=codec::decode(&codec::encode(&g).unwrap()).unwrap();
+    assert_eq!(loaded.insert(0,&stack(1),Access::Automation,false).unwrap().stored,0);
+    assert_eq!(loaded.extract(0,3000,Access::Automation,false).unwrap().unwrap().count,3000);
 }
 #[test]fn detached_drawers_are_not_copied_or_truncated(){
     let mut g=Group::standard(1,false).unwrap();g.insert(0,&stack(2000),Access::Automation,false).unwrap();
     let token=g.detach(0,Access::Player(1)).unwrap();assert_eq!(g.count(0),0);assert!(g.detach(0,Access::Player(1)).is_err());
-    let mut small=Group::standard(4,false).unwrap();assert_eq!(small.attach(0,&token,Access::Player(1)),Err(Error::CapacityInUse));
+    let mut small=Group::standard(4,false).unwrap();assert_eq!(small.attach(0,&token,Access::Player(1)),Err(Error::Incompatible));
+    small.detach(0,Access::Player(1)).unwrap();let before=small.clone();
+    assert_eq!(small.attach(0,&token,Access::Player(1)),Err(Error::CapacityInUse));assert_eq!(small,before);
     g.attach(0,&token,Access::Player(1)).unwrap();assert_eq!(g.count(0),2000);
 }
 #[test]fn balancing_conserves_exact_count(){
@@ -138,6 +191,21 @@ fn network()->Network{
     n.remotes.push(RemoteBinding{controller:pos(0),drawer:pos(10),group:false});assert!(n.connected(&pos(0),50).contains(&pos(10)));
     n.nodes.remove(&pos(10));assert!(!n.connected(&pos(0),50).contains(&pos(10)));
 }
+#[test]
+fn a_single_remote_shares_membership_without_cutting_off_a_local_connection() {
+    let mut net = network();
+    let Some(Node::Drawers(drawer)) = net.nodes.get_mut(&pos(2)) else { panic!() };
+    drawer.add_upgrade(Upgrade::Remote, Access::Administrator).unwrap();
+    assert!(net.connected(&pos(0), 50).contains(&pos(3)));
+
+    net.remotes.push(RemoteBinding { controller: pos(0), drawer: pos(2), group: false });
+    assert!(net.connected(&pos(0), 50).contains(&pos(3)));
+
+    net.nodes.remove(&pos(1));
+    let remote_only = net.connected(&pos(0), 50);
+    assert!(remote_only.contains(&pos(2)));
+    assert!(!remote_only.contains(&pos(3)));
+}
 #[test]fn network_transfer_to_full_destination_keeps_source_intact(){
     let mut n=network();for x in [2,3]{if let Some(Node::Drawers(g))=n.nodes.get_mut(&pos(x)){g.insert(0,&stack(2047),Access::Automation,false).unwrap();}}
     let original=n.clone();assert_eq!(n.transfer(&pos(2),0,&pos(0),64),0);assert_eq!(n,original);
@@ -147,6 +215,17 @@ fn network()->Network{
     g.use_key(Key::Personal,123).unwrap();g.frame=Some(Frame{side:"minecraft:stone".into(),trim:"minecraft:gold_block".into(),front:"minecraft:glass".into()});
     let k=g.item(2).unwrap().clone();g.insert(2,&Stack{item:k,count:99999},Access::Automation,false).unwrap();
     assert_eq!(codec::decode(&codec::encode(&g).unwrap()).unwrap(),g);
+}
+#[test]
+fn compacting_inventory_uses_the_shared_stock_when_packed() {
+    assert!(!Group::standard(1, false).unwrap().has_inventory_data());
+    let mut group = compact();
+    let item = group.item(2).unwrap().clone();
+    group.insert(2, &Stack { item, count: 1 }, Access::Automation, false).unwrap();
+    assert!(group.drawers.iter().all(|drawer| drawer.count == 0));
+    assert!(group.has_inventory_data());
+    let restored = codec::decode(&codec::encode(&group).unwrap()).unwrap();
+    assert_eq!(restored.count(2), 1);
 }
 #[test]fn corrupt_or_truncated_save_is_rejected_without_resetting_inventory(){
     let mut g=Group::standard(1,false).unwrap();g.insert(0,&stack(1000),Access::Automation,false).unwrap();let mut saved=codec::encode(&g).unwrap();

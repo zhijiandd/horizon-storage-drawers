@@ -17,10 +17,11 @@ type Pos=[i32;3];
 // Run this before resources load, rather than expecting a second manual content installation.
 pub(super) fn content_root(root:&std::path::Path,enabled:&BTreeSet<String>,disabled:&BTreeSet<String>,dev:&[std::path::PathBuf])
     ->std::ops::ControlFlow<std::path::PathBuf>{
+    sd::config::write_defaults();
     let bytes=horizon_client::native_data!("storagedrawers","content.hmod");
     let Ok(here)=std::env::current_dir()else{return std::ops::ControlFlow::Continue(());};
     let dir=here.join(".horizon-cache/native-content");
-    let path=dir.join("storagedrawers-0.2.7.hmod");
+    let path=dir.join("storagedrawers-0.2.8.hmod");
     if dev.contains(&path){return std::ops::ControlFlow::Continue(());}
     let ready=std::fs::read(&path).is_ok_and(|saved|saved==bytes.as_slice());
     if !ready&&(std::fs::create_dir_all(&dir).and_then(|()|std::fs::write(&path,bytes))).is_err(){
@@ -85,21 +86,20 @@ fn conversion_key(game:&Game<'_>,g:&sd::Group,slot:usize,input:&sd::ItemKey)->sd
     if equivalent||tagged{target.clone()}else{input.clone()}
 }
 fn insert_group(game:&Game<'_>,g:&mut sd::Group,slot:usize,input:&sd::Stack,access:sd::Access,simulate:bool)->Result<sd::Inserted,sd::Error>{
+    if !sd::config::can_store(&input.item.id){return Err(sd::Error::Incompatible);}
     let item=conversion_key(game,g,slot,&input.item);g.insert(slot,&sd::Stack{item,count:input.count},access,simulate)
 }
+// All multi-slot intake (pipes, hopper contact and magnets) uses this ordering:
+// exhaust physical free space across every slot before considering void overflow.
+fn insert_targets(game:&Game<'_>,g:&mut sd::Group,targets:&[usize],input:&sd::Stack,access:sd::Access)->sd::Inserted{
+    let conversions:Vec<_>=targets.iter().filter_map(|&slot|{
+        let target=g.item(slot)?;
+        target.same_item(&conversion_key(game,g,slot,&input.item)).then(||target.clone())
+    }).collect();
+    g.insert_all(targets,input,access,false,&|target,_|conversions.iter().any(|i|i.same_item(target)))
+}
 pub(super) fn feature_config()->&'static serde_json::Value{
-    static CONFIG:std::sync::OnceLock<serde_json::Value>=std::sync::OnceLock::new();
-    CONFIG.get_or_init(||{
-        let mut tags=Vec::new();for kind in ["storage_blocks","ingots","nuggets"]{for material in ["aluminum","constantan","steel","uranium","invar","tin","lead","silver","platinum","nickel","osmium","bronze","electrum"]{tags.push(format!("c:{kind}/{material}"));}}
-        let mut config=serde_json::json!({"conversion_tag_allowlist":tags,"conversion_tag_denylist":[],"conversion_equivalence_groups":[],
-            "controller_range":50,"remote_range":0,"remote_group_range":0,"framing_solid_materials":true,"framing_opaque_materials":false,
-            "framing_material_denylist":[],"detached_force_capacity_check":false,"detached_heavy":false,"redstone_analog_output":true});
-        let path=std::path::Path::new("horizon-mods/.horizon-mod-data/storagedrawers/features.json");
-        if let Ok(bytes)=std::fs::read(path){if let Ok(serde_json::Value::Object(values))=serde_json::from_slice::<serde_json::Value>(&bytes){
-            for (k,v) in values{config[&k]=v;}
-        }}else if let Some(parent)=path.parent(){if std::fs::create_dir_all(parent).is_ok(){let _=std::fs::write(path,serde_json::to_vec_pretty(&config).unwrap());}}
-        config
-    })
+    sd::config::features()
 }
 fn controller_range()->u32{feature_config()["controller_range"].as_u64().unwrap_or(50).clamp(1,512)as u32}
 // Called after vanilla's predicted BlockItem component application, before
@@ -173,7 +173,7 @@ fn network_insert(game:&Game<'_>,net:&mut sd::Network,origin:&sd::Position,input
         let Some(sd::Node::Drawers(original))=working.nodes.get(&p)else{continue;};let mut g=original.clone();let mut target=slot;
         let block=name_at(game,p.xyz);
         if kind(&block).contains("compacting")&&g.compact.is_none(){
-            let Some(stock)=stack(&input.item,1)else{continue;};seed(game,&block,&mut g,&stock);
+            let Some(stock)=stack(&input.item,1)else{continue;};if !seed(game,&block,&mut g,&stock,access){continue;}
             let Some(c)=&g.compact else{continue;};let Some(slot)=c.views.iter().position(|(i,_)|i.same_item(&input.item))else{continue;};target=slot;
         }
         let offered=if phase==0{g.item(target).map_or(0,|i|g.capacity(target,i).saturating_sub(g.count(target))).min(remaining)}else{remaining};
@@ -217,7 +217,7 @@ fn upgrade_items_from_nbt(nbt:&Compound,g:&sd::Group,positions:&[usize])->Vec<It
         saved.iter().find(|entry|matches!(entry.get("slot"),Some(Tag::Int(p))if *p==physical as i32))
             .and_then(|entry|horizon_items::item_nbt::item_from_nbt(entry.get("item")?))
             .filter(|s|s.count>0&&upgrade(&s.item)==Some(u))
-            .map(|mut s|{s.count=1;s}).unwrap_or_else(||{
+            .map(|mut s|{s.count=1;super::sd_items::canonical_upgrade(s)}).unwrap_or_else(||{
                 let mut s=upgrade_stack(u);
                 if matches!(u,sd::Upgrade::Remote|sd::Upgrade::RemoteGroup){if let Some(remote)=nbt.get(&"sd_remote".into()){
                     s.data_mut().set_other("minecraft:custom_data",Some(remote.clone()));
@@ -310,7 +310,8 @@ pub(super) fn screen(block:&str,out:&mut Option<horizon_client::mod_api::NativeS
     let mut positions=vec![None;18];
     for i in 0..7{positions[i]=Some([26.+i as f32*18.,86.]);}
     let cells:&[[f32;2]]=match slots(block){
-        1=>&[[80.,36.]],2=>&[[80.,23.],[80.,49.]],
+        1=>&[[80.,36.]],2 if kind(block).contains("compacting")=>&[[80.,23.],[67.,49.]],
+        2=>&[[80.,23.],[80.,49.]],
         3=>&[[80.,23.],[67.,49.],[93.,49.]],
         _=>&[[67.,23.],[93.,23.],[67.,49.],[93.,49.]],
     };
@@ -368,28 +369,16 @@ pub(super) fn ticking(block:&str,ticks:&mut bool){if drawer(block)||controller(b
 pub(super) fn update_tag(entity:&ModBlockEntity,tag:&mut Option<Compound>){if ours(&entity.id){let mut data=entity.nbt.clone();super::sd_framing::update_tag(entity,&mut data);*tag=Some(data);}}
 
 fn family(game:&Game<'_>,input:&ItemStack,n:usize,half:bool)->Option<sd::Group>{
-    if input.damage!=0||input.extra.is_some(){return None;}
-    const FAMILIES:&[&[(&str,u64)]]=&[
-        &[("iron_block",81),("iron_ingot",9),("iron_nugget",1)],&[("gold_block",81),("gold_ingot",9),("gold_nugget",1)],
-        &[("copper_block",9),("copper_ingot",1)],&[("diamond_block",9),("diamond",1)],&[("emerald_block",9),("emerald",1)],
-        &[("lapis_block",9),("lapis_lazuli",1)],&[("redstone_block",9),("redstone",1)],&[("coal_block",9),("coal",1)],
-        &[("netherite_block",9),("netherite_ingot",1)],&[("raw_iron_block",9),("raw_iron",1)],
-        &[("raw_gold_block",9),("raw_gold",1)],&[("raw_copper_block",9),("raw_copper",1)],
-        &[("slime_block",9),("slime_ball",1)],&[("hay_block",9),("wheat",1)],&[("bone_block",9),("bone_meal",1)],
-        &[("dried_kelp_block",9),("dried_kelp",1)],&[("snow_block",4),("snowball",1)],&[("clay",4),("clay_ball",1)],
-    ];
-    let id=input.item.strip_prefix("minecraft:")?;
-    let Some(f)=FAMILIES.iter().find(|f|f.iter().any(|i|i.0==id))else{
-        return sd::Group::compacting(vec![(key(game,input),1)],half).ok();
-    };
-    let start=if n==2&&f.len()==3&&id==f[2].0{1}else{0};let f=&f[start..];let base=f.last()?.1;
-    let views=f.iter().map(|(i,factor)|(key(game,&ItemStack::new(&format!("minecraft:{i}"),1)),factor/base)).collect();
+    let views=super::sd_compacting::views(game,input,n)?.into_iter().map(|(item,factor)|(key(game,&item),factor)).collect();
     sd::Group::compacting(views,half).ok()
 }
-fn seed(game:&Game<'_>,block:&str,g:&mut sd::Group,input:&ItemStack){
+fn seed(game:&Game<'_>,block:&str,g:&mut sd::Group,input:&ItemStack,access:sd::Access)->bool{
+    if !sd::config::can_store(&input.item)||g.check(access).is_err(){return false;}
     if kind(block).contains("compacting")&&g.compact.is_none()&&g.count(0)==0{
-        if let Some(mut c)=family(game,input,slots(block),g.half){c.upgrades=g.upgrades.clone();c.attributes=g.attributes.clone();c.frame=g.frame.clone();*g=c;}
-    }
+        if !g.can_initialize(access){return false;}
+        let Some(mut c)=family(game,input,slots(block),g.half)else{return false;};
+        c.upgrades=g.upgrades.clone();c.attributes=g.attributes.clone();c.frame=g.frame.clone();*g=c;
+    }true
 }
 fn facing(game:&Game<'_>,pos:Pos)->&'static str{
     match game.native_block_property(pos,"facing").as_deref(){Some("east")=>"east",Some("south")=>"south",Some("west")=>"west",_=>"north"}
@@ -542,7 +531,7 @@ pub(super) fn right_click(game:&mut Game<'_>,pos:Pos,face:Pos,cancel:&mut bool){
     if game.native_sneaking()&&held.is_none(){OPEN.with_borrow_mut(|q|q.push((player.uuid,game.dim.id().into(),pos)));return;}
     if !front(game,pos,face){return;}
     let Some(clicked)=clicked_slot(game,pos,slots(&block))else{*cancel=false;return;};
-    if let Some(s)=&held{seed(game,&block,&mut g,s);}
+    if let Some(s)=&held{if !seed(game,&block,&mut g,s,access){return;}}
     if kind(&block).contains("compacting")&&g.compact.is_none(){feedback(game,"storagedrawers.message.no_compaction");return;}
     let bulk=CLICKS.with_borrow_mut(|c|{let old=c.insert(player.uuid,(game.dim.id().into(),pos,game.world.game_time));
         old.is_some_and(|(d,p,t)|d==game.dim.id()&&p==pos&&game.world.game_time-t<10)});
@@ -683,20 +672,11 @@ impl ItemHandler{
         if scan{if let Some(root)=self.root{return network_insert(game,&mut self.network,&position(game,root),&input,sd::Access::Automation,false).accepted();}}
         let p=if scan{self.address}else{let Some((p,_))=self.location(slot)else{return 0;};p};
         let Some(original)=self.group_at(p)else{return 0;};let mut g=original.clone();
-        if let Some(stock)=stack(&input.item,1){seed(game,&name_at(game,p),&mut g,&stock);}
+        if let Some(stock)=stack(&input.item,1){if !seed(game,&name_at(game,p),&mut g,&stock,sd::Access::Automation){return 0;}}
         if kind(&name_at(game,p)).contains("compacting")&&g.compact.is_none(){return 0;}
         let targets:Vec<_>=if scan{(0..g.drawers.len()).collect()}else{vec![self.location(slot).unwrap().1]};
-        let mut remaining=input.count;
-        // Match Java's repository: use real free capacity before void overflow.
-        for relaxed in [false,true]{for &target in &targets{
-            if remaining==0{break;}if target>=g.drawers.len()||g.drawers[target].detached{continue;}
-            if g.item(target).is_none()&&g.attributes.locked{continue;}
-            let converted=conversion_key(game,&g,target,&input.item);
-            let amount=if relaxed{remaining}else{g.capacity(target,g.item(target).unwrap_or(&converted)).saturating_sub(g.count(target)).min(remaining)};
-            if amount==0{continue;}
-            if let Ok(put)=insert_group(game,&mut g,target,&sd::Stack{item:input.item.clone(),count:amount},sd::Access::Automation,false){remaining-=put.accepted();}
-        }}
-        let accepted=input.count-remaining;if accepted>0{self.network.nodes.insert(position(game,p),sd::Node::Drawers(g));}accepted
+        let accepted=insert_targets(game,&mut g,&targets,&input,sd::Access::Automation).accepted();
+        if accepted>0{self.network.nodes.insert(position(game,p),sd::Node::Drawers(g));}accepted
     }
     fn extract(&mut self,slot:usize,count:u32)->Option<ItemStack>{
         let (p,s)=self.location(slot)?;let mut g=self.group_at(p)?.clone();
@@ -941,7 +921,15 @@ struct DrawerMenu{
     inv:Vec<Option<ItemStack>>,offhand:Option<ItemStack>,carried:Option<ItemStack>,
 }
 impl DrawerMenu{
-    fn visible(&self,slot:i32)->bool{(0..7).contains(&slot)||(9..9+self.g.drawers.len()as i32).contains(&slot)||(18..54).contains(&slot)}
+    fn storage_slots(&self, block: &str) -> std::ops::Range<i32> {
+        let count = if block.contains("compacting") && self.g.compact.is_none() {
+            slots(block)
+        } else {
+            self.g.drawers.len()
+        };
+        9..9 + count as i32
+    }
+    fn visible(&self,block:&str,slot:i32)->bool{(0..7).contains(&slot)||self.storage_slots(block).contains(&slot)||(18..54).contains(&slot)}
     fn stack(&self,slot:i32)->Option<ItemStack>{
         if (0..7).contains(&slot){return self.positions.iter().position(|&p|p==slot as usize).map(|i|self.upgrades[i].clone());}
         if let Some(i)=super::native_menus::native_menu_inventory_slot(18,slot){return self.inv[i].clone();}
@@ -964,10 +952,21 @@ impl DrawerMenu{
         if item.count==0{self.inv[i]=None;}Some(out)
     }
     fn deposit(&mut self,game:&Game<'_>,block:&str,slot:i32,input:&ItemStack,amount:u32,access:sd::Access)->u32{
-        if !(9..9+self.g.drawers.len()as i32).contains(&slot)||amount==0{return 0;}
-        let mut g=self.g.clone();seed(game,block,&mut g,input);let key=key(game,input);
-        let target=if let Some(c)=&g.compact{let Some(i)=c.views.iter().position(|(i,_)|i.same_item(&key))else{return 0;};i}else{(slot-9)as usize};
-        let accepted=insert_group(game,&mut g,target,&sd::Stack{item:key,count:u64::from(amount.min(input.count))},access,false).map_or(0,|p|p.accepted()as u32);
+        if !self.storage_slots(block).contains(&slot)||amount==0{return 0;}
+        let clicked = (slot - 9) as usize;
+        if self.g.attributes.locked && self.g.item(clicked).is_none() { return 0; }
+        let mut g=self.g.clone();if !seed(game,block,&mut g,input,access){return 0;}let key=key(game,input);
+        // An unseeded compacting drawer may initialize from any cell. Once
+        // seeded, each visible cell addresses its own tier.
+        let target = if self.g.compact.is_none() && let Some(compact) = &g.compact {
+            let Some(tier) = compact.views.iter().position(|(item, _)| item.same_item(&key)) else { return 0; };
+            tier
+        } else {
+            clicked
+        };
+        let count = u64::from(amount.min(input.count)).min(g.remaining_capacity(target, &key));
+        if count == 0 { return 0; }
+        let accepted=insert_group(game,&mut g,target,&sd::Stack{item:key,count},access,false).map_or(0,|p|p.stored as u32);
         if accepted>0{self.g=g;}accepted
     }
     fn pickup(&mut self,game:&Game<'_>,block:&str,slot:i32,button:i32,access:sd::Access,creative:bool){
@@ -1008,7 +1007,7 @@ impl DrawerMenu{
         }
     }
     fn swap(&mut self,game:&Game<'_>,block:&str,slot:i32,button:i32,access:sd::Access,creative:bool){
-        if !matches!(button,0..=8|40)||!self.visible(slot){return;}
+        if !matches!(button,0..=8|40)||!self.visible(block,slot){return;}
         let mut source=if button==40{self.offhand.clone()}else{self.inv[button as usize].clone()};
         if (0..7).contains(&slot){
             // InventoryUpgrade.canSwapUpgrade checks the original source count.
@@ -1025,7 +1024,7 @@ impl DrawerMenu{
         if button==40{self.offhand=source;}else{self.inv[button as usize]=source;}
     }
     fn drag_accepts(&self,game:&Game<'_>,block:&str,slot:i32,input:&ItemStack,access:sd::Access)->bool{
-        if !self.visible(slot){return false;}
+        if !self.visible(block,slot){return false;}
         if let Some(existing)=self.stack(slot){if !existing.same_item_same_components(input)||existing.count>game.stack_max_size(input){return false;}}
         if (0..7).contains(&slot){return self.stack(slot).is_none()&&upgrade(&input.item).is_some_and(|u|self.g.clone().add_upgrade(u,access).is_ok());}
         if (18..54).contains(&slot){return true;}
@@ -1043,9 +1042,9 @@ impl DrawerMenu{
         }
         let mut source=input.clone();source.count=amount;self.deposit(game,block,slot,&source,amount,access)
     }
-    fn collect(&mut self,game:&Game<'_>,slot:i32,button:i32,access:sd::Access,creative:bool){
+    fn collect(&mut self,game:&Game<'_>,block:&str,slot:i32,button:i32,access:sd::Access,creative:bool){
         let Some(mut cursor)=self.carried.clone()else{return;};
-        if !self.visible(slot)||self.stack(slot).is_some()&&self.may_pickup(slot,access,creative){return;}
+        if !self.visible(block,slot)||self.stack(slot).is_some()&&self.may_pickup(slot,access,creative){return;}
         let max=game.stack_max_size(&cursor);let order:Vec<i32>=if button==0{(0..54).collect()}else{(0..54).rev().collect()};
         for full in [false,true]{for &slot in &order{
             if cursor.count>=max{break;}
@@ -1106,13 +1105,13 @@ fn apply_menu_click(game:&mut Game<'_>,uuid:u128,pos:Pos,slot:i32,button:i32,mod
     }else if slot==-999&&matches!(mode,0|1){
         if let Some(mut source)=state.carried.take(){let mut drop=source.clone();drop.count=if button==1{1}else{source.count};source.count-=drop.count;
             state.carried=(source.count>0).then_some(source);drops.push(drop);}
-    }else if state.visible(slot){match mode{
+    }else if state.visible(&block,slot){match mode{
         0=>state.pickup(game,&block,slot,button,access,creative),
         1=>state.quick_move(game,slot,access,creative),
         2=>state.swap(game,&block,slot,button,access,creative),
         3=>{if creative&&state.carried.is_none(){state.carried=state.stack(slot).map(|mut s|{s.count=game.stack_max_size(&s);s});}}
         4=>{if state.carried.is_none(){let amount=if button==0{1}else{u32::MAX};if let Some(drop)=state.take(slot,amount,access,creative){drops.push(drop);}}}
-        6=>state.collect(game,slot,button,access,creative),_=>{}
+        6=>state.collect(game,&block,slot,button,access,creative),_=>{}
     }}
     state.upgrades=state.upgrades.iter().map(|s|validate_remote(game,pos,s)).collect();
     let changed=state.g!=before.g||state.positions!=before.positions||state.upgrades!=before.upgrades;
@@ -1171,19 +1170,27 @@ pub(super) fn block_tick(game:&mut Game<'_>,pos:Pos,m:&mut ModBlockEntity){
     let Ok(mut g)=group(m)else{return;};
     if g.attributes.suspended{return;}
     let old=g.clone();let dim=game.dim.id();
-    let range=g.magnet_range();let interval=g.magnet_interval();
-    if range[0]>0&&game.world.game_time%interval.max(1)as i64==0{
+    if ![sd::Upgrade::Magnet1,sd::Upgrade::Magnet2,sd::Upgrade::Magnet3].iter().any(|&u|g.has(u)){return;}
+    let now=game.world.game_time;
+    if matches!(m.nbt.get(&"sd_magnet_next".into()),Some(Tag::Long(next))if now<*next){return;}
+    let range=g.magnet_range();let mut collected=false;
+    {
         let r=range[0]as f64;
-        let (min,max)=if range[0]>0{([pos[0]as f64-r,pos[1]as f64-range[2]as f64,pos[2]as f64-r],
-            [pos[0]as f64+1.+r,pos[1]as f64+1.+range[1]as f64,pos[2]as f64+1.+r])}
-            else{([pos[0]as f64,pos[1]as f64+1.,pos[2]as f64],[pos[0]as f64+1.,pos[1]as f64+2.,pos[2]as f64+1.])};
+        let (min,max)=([pos[0]as f64-r,pos[1]as f64-range[2]as f64,pos[2]as f64-r],
+            [pos[0]as f64+1.+r,pos[1]as f64+1.+range[1]as f64,pos[2]as f64+1.+r]);
         for item in game.native_item_entities(dim,min,max){
-            seed(game,&block_name(m),&mut g,&item.stack);
-            let k=key(game,&item.stack);let Some(slot)=(0..g.drawers.len()).find(|&i|g.item(i).map_or(!g.attributes.locked,|v|v.same_item(&conversion_key(game,&g,i,&k))))else{continue;};
-            let put=insert_group(game,&mut g,slot,&sd::Stack{item:k,count:u64::from(item.stack.count)},sd::Access::Automation,false).unwrap_or_default();
-            if put.accepted()>0{let mut rest=item.stack;rest.count-=put.accepted()as u32;game.native_set_item_entity(dim,item.id,rest);}
+            let before=g.clone();
+            if !seed(game,&block_name(m),&mut g,&item.stack,sd::Access::Automation){continue;}
+            let targets:Vec<_>=(0..g.drawers.len()).collect();
+            let put=insert_targets(game,&mut g,&targets,&sd::Stack{item:key(game,&item.stack),count:u64::from(item.stack.count)},sd::Access::Automation);
+            if put.accepted()>0{let mut rest=item.stack;rest.count-=put.accepted()as u32;
+                if game.native_set_item_entity(dim,item.id,rest){collected=true;}else{g=before;}
+            }else{g=before;}
         }
     }
+    let jitter=(now as u64).wrapping_mul(6364136223846793005).wrapping_add(pos[0]as u64).wrapping_add(pos[2]as u64)%5;
+    let interval=if collected{g.magnet_interval()}else{g.magnet_idle_interval()+jitter};
+    m.nbt.insert("sd_magnet_next".into(),Tag::Long(now.saturating_add(interval as i64)));
     if g!=old{save(m,&g);game.native_block_entity_sync(pos);game.native_update_signal_neighbors(dim,pos);game.native_update_output_neighbors(dim,pos);}
 }
 
@@ -1212,9 +1219,21 @@ pub(super) fn render(game:&Game<'_>,pos:Pos,block:&str,m:&ModBlockEntity,draw:&m
     if !game.native_on(ID){return;}
     super::sd_appearance::render(game,pos,block,m,draw);
     if !drawer(block){return;}let Ok(g)=group(m)else{return;};
+    let Some(player)=game.player.as_ref()else{return;};
+    let player_pos=[player.position.x,player.position.y,player.position.z];
+    let behind=match facing(game,pos){"north"=>player_pos[2].floor()>pos[2]as f64,"south"=>player_pos[2].floor()<pos[2]as f64,
+        "west"=>player_pos[0].floor()>pos[0]as f64,_=>player_pos[0].floor()<pos[0]as f64};
+    if behind{return;}
+    let distance=player_pos.iter().enumerate().map(|(i,v)|(v-(pos[i]as f64+0.5)).powi(2)).sum::<f64>().sqrt();
+    let labels=sd::config::distance("label_render_distance",20.);
+    if labels>0.&&distance>labels{return;}
+    let quantity=sd::config::distance("quantity_render_distance",10.);
+    let fade=sd::config::distance("quantity_fade_distance",20.);
+    let alpha=if fade==0.||distance>fade{(1.-((distance-4.)/6.)).max(0.05)}else{1.};
     let offset=match facing(game,pos){"east"=>[1,0,0],"south"=>[0,0,1],"west"=>[-1,0,0],_=>[0,0,-1]};
     draw.light=horizon_client::block_entity_render::vertex_light(game.world.light(pos[0]+offset[0],pos[1],pos[2]+offset[2]));
-    let minimum=if g.has(sd::Upgrade::Illumination){13*16}else{16};
+    let minimum=if g.has(sd::Upgrade::Illumination){sd::config::uint("illumination_level",13,0,15)*16}
+        else{sd::config::uint("minimum_illumination_level",1,0,15)*16}as u32;
     draw.light=(draw.light&0xFF)|((draw.light>>8).max(minimum)<<8);
     draw.push();draw.translate([0.5,0.,0.5]);
     let angle=match facing(game,pos){"south"=>0.,"east"=>90.,"west"=>270.,_=>180.};
@@ -1229,21 +1248,24 @@ pub(super) fn render(game:&Game<'_>,pos:Pos,block:&str,m:&ModBlockEntity,draw:&m
             draw.push();draw.translate([(from[0]+to[0])/32.,(from[1]+to[1])/32.,0.]);
             draw.scale([(to[0]-from[0])/16.,(to[1]-from[1])/16.,0.001]);
             draw_label_item(game,draw,&s,angle);draw.pop();
-            if g.attributes.quantified&&g.count(slot)>0{
+            if g.attributes.quantified&&g.count(slot)>0&&(quantity==0.||distance<quantity){
                 let text=count_text(g.count(slot));let [from,to]=counts[slot];
                 draw.push();draw.translate([(from[0]+to[0])/32.,to[1]/16.,0.008]);draw.scale([1./128.,-1./128.,1./128.]);
                 let width=game.native_text_width(&text);
-                game.native_draw_text(draw,&Text::literal(text),[-width/2.,0.],0xFFFFFF,false,0);draw.pop();
+                let start=draw.vertices_mut().len();
+                game.native_draw_text(draw,&Text::literal(text),[-width/2.,0.],0xFFFFFF,false,0);
+                if alpha<1.{for v in &mut draw.vertices_mut()[start..]{v.color=(v.color&0xFFFFFF)|((alpha*255.)as u32)<<24;
+                    v.layer|=horizon_client::gfx::TRANSLUCENT_ITEM_OVERLAY;}}
+                draw.pop();
             }
         }
-        if g.has(sd::Upgrade::FillLevel)&&!g.attributes.shrouded&&(!compact||slot==0){
-            let cap=g.capacity(slot,i);let ratio=if cap>0{g.count(slot)as f32/cap as f32}else{0.};
+        if g.has(sd::Upgrade::FillLevel)&&(!compact||slot==0){
+            let cap=g.capacity(slot,i);let ratio=if cap>0{(g.count(slot)as f32/cap as f32).min(1.)}else{0.};
             let [a,b]=indicators[slot];let [_,base]=bases[slot];
             let end=[if b[0]>base[0]{a[0]+(b[0]-base[0])*ratio}else{b[0]},
                 if b[1]>base[1]{a[1]+(b[1]-base[1])*ratio}else{b[1]}];
             let variant=if compact{if slots(block)==2{"comp2"}else{"comp"}}else{match slots(block){2=>"2",4=>"4",_=>"1"}};
             // Original on/off indicator textures cover the complete face; crop their active region.
-            face_quad(game,draw,&format!("storagedrawers:block/indicator/indicator_{variant}_off"),[0.,0.,16.,16.],0.004);
             if end[0]>a[0]&&end[1]>a[1]{face_quad(game,draw,&format!("storagedrawers:block/indicator/indicator_{variant}_on"),[a[0],a[1],end[0],end[1]],0.005);}
         }
     }
@@ -1312,6 +1334,32 @@ pub(super) fn before_remove(level:&mut super::GameLevel<'_>,pos:horizon_core::po
         return;
     }
     let Some(Tag::ByteArray(bytes))=m.nbt.get(&SAVE.into()).cloned()else{return;};
+    let mode=feature_config()["drop_mode"].as_str().unwrap_or("KEEP");
+    if matches!(mode,"DROP"|"VOID"){
+        // Populate the common container spill, rather than independently
+        // spawning drops. Removal of one entity therefore settles stock once.
+        let mut spills=Vec::new();
+        if mode=="DROP"{if let Ok(mut g)=group(m){
+            let positions=positions_from_nbt(&m.nbt,&g);
+            spills.extend(upgrade_items_from_nbt(&m.nbt,&g,&positions).into_iter().filter(|s|upgrade(&s.item)!=Some(sd::Upgrade::CreativeVending)));
+            if !g.has(sd::Upgrade::CreativeVending){
+                g.attributes.suspended=true;
+                let mut limit=sd::config::uint("drop_stack_limit",32,0,65536);
+                while limit>0{let start=limit;
+                    for slot in 0..g.drawers.len(){if limit==0{break;}
+                        let amount=g.item(slot).map_or(0,|i|u64::from(i.max_stack));
+                        if let Ok(Some(out))=g.extract(slot,amount,sd::Access::Administrator,false){if let Some(item)=stack(&out.item,out.count){spills.push(item);limit-=1;}}
+                    }if start==limit{break;}
+                }
+            }
+        }}
+        m.items=spills.into_iter().map(Some).collect();
+        if let Some(frame)=m.nbt.get(&"sd_frame".into()){original_custom.insert("sd_frame".into(),frame.clone());}
+        original.remove(&"minecraft:max_stack_size".into());
+        if !original_custom.is_empty(){original.insert("minecraft:custom_data".into(),Tag::Compound(original_custom));}
+        if !original.is_empty(){level.pending.copied.insert([pos.x,pos.y,pos.z],(m.id.clone(),original));}
+        return;
+    }
     if group(m).ok().is_some_and(|g|g.upgrades.is_empty()&&g.frame.is_none()&&g.attributes==sd::Attributes::default()
         &&!m.nbt.contains_key(&"sd_frame".into())&&original.is_empty()&&original_custom.is_empty()&&g.drawers.iter().all(|d|d.item.is_none()&&!d.detached&&d.count==0)){
         m.items.clear();return;

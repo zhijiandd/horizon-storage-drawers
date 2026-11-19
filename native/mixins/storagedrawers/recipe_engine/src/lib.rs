@@ -3,6 +3,7 @@
 pub mod storage;
 pub mod network;
 pub mod codec;
+pub mod config;
 pub use storage::*;
 pub use network::*;
 

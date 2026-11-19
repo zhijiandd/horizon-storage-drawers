@@ -10,3 +10,6 @@ path = "native/mixins/storagedrawers/recipe_engine/src/lib.rs"
 
 [workspace]
 
+[dependencies]
+serde_json = "1"
+

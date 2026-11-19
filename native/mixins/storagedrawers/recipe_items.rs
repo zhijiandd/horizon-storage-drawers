@@ -27,8 +27,11 @@ pub(crate) fn upgrade_items(c:&Compound,g:&sd::Group,positions:&[usize])->Vec<It
     g.upgrades.iter().zip(positions).map(|(&u,&pos)|{
         let mut item=items.iter().find(|v|matches!(v.get("slot"),Some(Tag::Int(p))if *p==pos as i32))
             .and_then(|v|item_from_nbt(v.get("item")?)).filter(|s|upgrade(s)==Some(u))
-            .unwrap_or_else(||ItemStack::new(&format!("storagedrawers:{}",u.id()),1));item.count=1;item
+            .unwrap_or_else(||ItemStack::new(&format!("storagedrawers:{}",u.id()),1));item.count=1;canonical_upgrade(item)
     }).collect()
+}
+pub(crate) fn canonical_upgrade(mut item:ItemStack)->ItemStack{
+    if &*item.item=="storagedrawers:balanced_fill_upgrade"{item.item="storagedrawers:balance_fill_upgrade".into();}item
 }
 pub(crate) fn save_group(s:&mut ItemStack,g:&sd::Group,positions:&[usize],items:&[ItemStack])->Option<()>{
     if positions.len()!=g.upgrades.len()||items.len()!=positions.len(){return None;}
@@ -62,9 +65,9 @@ pub(crate) fn unbound(s:&ItemStack)->ItemStack{
 // Detached payload stores stack capacity independently of the held prototype.
 pub(crate) fn detached(s:&ItemStack)->Option<(Option<ItemStack>,u64,bool)>{
     if !matches!(kind(&s.item),"detached_drawer"|"detached_drawer_full"){return None;}
-    let c=custom(s);let Some(Tag::Compound(data))=c.get(&"sd_detached".into())else{return Some((None,32,false));};
+    let c=custom(s);let Some(Tag::Compound(data))=c.get(&"sd_detached".into())else{return Some((None,sd::config::detached_stacks(),false));};
     let item=data.get(&"item".into()).and_then(item_from_nbt).filter(|s|s.count>0);
-    let capacity=match data.get(&"capacity".into()){Some(Tag::Long(v))if *v>0=>*v as u64,_=>32};
+    let capacity=match data.get(&"capacity".into()){Some(Tag::Long(v))if *v>0=>*v as u64,_=>sd::config::detached_stacks()};
     let heavy=matches!(data.get(&"heavy".into()),Some(Tag::Byte(1)));Some((item,capacity,heavy))
 }
 pub(crate) fn make_detached(item:Option<ItemStack>,capacity:u64,heavy:bool)->ItemStack{
@@ -130,7 +133,7 @@ pub(crate) fn craft(grid:&[Option<ItemStack>],size:usize)->Option<(&'static str,
     if items.iter().filter(|s|detached(s).is_some()).count()==1&&items.iter().all(|s|detached(s).is_some()||upgrade(s).is_some_and(|u|u.multiplier().is_some())){
         let input=*items.iter().find(|s|detached(s).is_some())?;let (stock,capacity,heavy)=detached(input)?;
         let added:u64=items.iter().filter_map(|s|upgrade(s).and_then(sd::Upgrade::multiplier)).sum();
-        let payload=make_detached(if added==0{None}else{stock},capacity.saturating_add(32*added),heavy&&added>0);
+        let payload=make_detached(if added==0{None}else{stock},capacity.saturating_add(sd::config::detached_stacks().saturating_mul(added)),heavy&&added>0);
         let mut out=if added==0{payload.clone()}else{let mut out=input.clone();let mut c=custom(&out);c.insert("sd_detached".into(),custom(&payload).remove(&"sd_detached".into())?);set_custom(&mut out,c);out};
         // Each craft consumes one drawer and one item from each upgrade cell.
         // Copy components, never the count of the input ingredient stack.

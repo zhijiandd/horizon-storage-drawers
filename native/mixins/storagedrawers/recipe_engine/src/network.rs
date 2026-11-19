@@ -24,29 +24,47 @@ pub struct RemoteBinding { pub drawer:Position,pub controller:Position,pub group
 pub struct Network { pub nodes:BTreeMap<Position,Node>,pub remotes:Vec<RemoteBinding>,pub range:u32 }
 impl Default for Network{fn default()->Self{Self{nodes:BTreeMap::new(),remotes:Vec::new(),range:50}}}
 
+pub fn remote_range(controller_range: u32, group: bool) -> u32 {
+    let key = if group { "remote_group_range" } else { "remote_range" };
+    match crate::config::features()[key].as_u64().unwrap_or(0) {
+        0 => controller_range,
+        limit => limit.min(u64::from(controller_range)) as u32,
+    }
+}
+
 impl Network {
     /// Traverse only known (loaded) nodes. A second controller terminates traversal.
     pub fn connected(&self,origin:&Position,range:u32)->BTreeSet<Position>{
         if !matches!(self.nodes.get(origin),Some(Node::Controller)){return BTreeSet::new();}
-        let mut visited=BTreeSet::new();let mut q=VecDeque::from([origin.clone()]);
-        for r in &self.remotes{
-            if &r.controller==origin&&origin.in_range(&r.drawer,range){
-                if let Some(Node::Drawers(g))=self.nodes.get(&r.drawer){
-                    if g.has(Upgrade::Remote)||g.has(Upgrade::RemoteGroup){
-                        if r.group{q.push_back(r.drawer.clone());}else{visited.insert(r.drawer.clone());}
-                    }
-                }
+        let mut connected = BTreeSet::new();
+        let mut expanded = BTreeMap::new();
+        let mut queue = VecDeque::from([(origin.clone(), range)]);
+        for binding in self.remotes.iter().filter(|binding| &binding.controller == origin) {
+            let limit = remote_range(range, binding.group);
+            let upgrade = if binding.group { Upgrade::RemoteGroup } else { Upgrade::Remote };
+            if !origin.in_range(&binding.drawer, limit)
+                || !matches!(self.nodes.get(&binding.drawer), Some(Node::Drawers(g)) if g.has(upgrade))
+            {
+                continue;
+            }
+            if binding.group {
+                queue.push_back((binding.drawer.clone(), limit));
+            } else {
+                connected.insert(binding.drawer.clone());
             }
         }
-        while let Some(at)=q.pop_front(){
-            if visited.contains(&at)||!origin.in_range(&at,range){continue;}
-            let Some(node)=self.nodes.get(&at)else{continue;};
-            if at!=*origin&&matches!(node,Node::Controller){continue;}
-            if self.remotes.iter().any(|r|r.drawer==at&&r.controller!=*origin){continue;}
-            visited.insert(at.clone());
-            if matches!(node,Node::Drawers(g)if g.has(Upgrade::Remote)&&!g.has(Upgrade::RemoteGroup)){continue;}
-            for n in at.neighbors(){if !visited.contains(&n){q.push_back(n);}}
-        }visited
+        while let Some((at, limit)) = queue.pop_front() {
+            if !origin.in_range(&at, limit) || expanded.get(&at).is_some_and(|&seen| seen >= limit) { continue; }
+            let Some(node) = self.nodes.get(&at) else { continue; };
+            if at != *origin && matches!(node, Node::Controller) { continue; }
+            if self.remotes.iter().any(|r| r.drawer == at && r.controller != *origin) { continue; }
+            // Membership through a single-drawer remote never suppresses a local search
+            // reaching the same drawer over a physical connection.
+            queue.extend(at.neighbors().map(|neighbor| (neighbor, limit)));
+            expanded.insert(at.clone(), limit);
+            connected.insert(at);
+        }
+        connected
     }
     /// Equal counts until a drawer fills; redistribute the remainder into
     /// drawers with space. Participants must opt into balanced fill.

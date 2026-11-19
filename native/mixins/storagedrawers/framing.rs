@@ -55,7 +55,8 @@ fn supports_front(item:&str)->bool{!item.ends_with("_trim")&&!item.ends_with("co
 fn result(v:&[Option<ItemStack>])->Option<ItemStack>{
     let target=v[0].as_ref()?;let side=v[1].as_ref()?;let front=if supports_front(&target.item){v[3].as_ref()}else{None};
     let mut out=data::make_frame(target,side,v[2].as_ref(),front)?;
-    out.count=v.iter().flatten().map(|s|s.count).min()?.min(out.count);(out.count>0).then_some(out)
+    out.count=[Some(target),Some(side),v[2].as_ref(),front].into_iter().flatten().map(|s|s.count).min()?;
+    (out.count>0).then_some(out)
 }
 fn shown(v:&[Option<ItemStack>])->Vec<Option<ItemStack>>{let mut slots=v.to_vec();slots.push(result(v));slots.resize(9,None);slots}
 pub(super) fn material(game:&Game<'_>,s:&ItemStack)->bool{
@@ -137,6 +138,7 @@ pub(super) fn menu_click(game:&mut Game<'_>,uuid:u128,window:i32,slot:i32,button
     let Some(host)=game.lan.as_ref()else{return true;};let Some(player_record)=host.hub.guests.iter().find(|v|v.uuid==uuid)else{return true;};
     let mut inv=player_record.inventory.clone();let mut cursor=player_record.carried.clone();let mut offhand=player_record.offhand.clone();
     let old=(v.clone(),inv.clone(),cursor.clone(),offhand.clone());let creative=player.game_mode==1;let max=|s:&ItemStack|game.stack_max_size(s);let mut drops=Vec::new();
+    let initial_target = v[0].clone();
     let drag=DRAGS.with_borrow_mut(|d|d.remove(&uuid));
     let mut action=mode;let mut clicked=slot;let mut mouse=button;
     if mode!=5&&drag.is_some(){action=-1;}
@@ -200,7 +202,7 @@ pub(super) fn menu_click(game:&mut Game<'_>,uuid:u128,window:i32,slot:i32,button
             if let Some(out)=take(&mut v,&mut inv,s,max(c)-c.count){c.count+=out.count;}
         }}}}
     }
-    unpack(&mut v);
+    if v[0] != initial_target { unpack(&mut v); }
     if (v.clone(),inv.clone(),cursor.clone(),offhand.clone())!=old{
         game.native_with_mod_block_entity(p,|m|{m.items=v.clone();});game.native_block_entity_sync(p);
         if let Some(host)=game.lan.as_mut(){if let Some(i)=host.hub.guests.iter().position(|v|v.uuid==uuid){let g=&mut host.hub.guests[i];g.inventory=inv;g.carried=cursor;g.offhand=offhand;if g.offhand!=old.3{host.hub.send_inventory(i);}}}
@@ -221,7 +223,7 @@ fn put(game:&Game<'_>,v:&mut Vec<Option<ItemStack>>,inv:&mut [Option<ItemStack>]
     if amount==0||!can_put(game,v,inv,slot,input){return 0;}let existing=get(v,inv,slot);
     if existing.as_ref().is_some_and(|s|!s.same_item_same_components(input)){return 0;}
     let count=existing.as_ref().map_or(0,|s|s.count);let put=amount.min(input.count).min(game.stack_max_size(input).saturating_sub(count));
-    if put>0{let mut out=input.clone();out.count=count+put;set(v,inv,slot,Some(out));unpack(v);}put
+    if put>0{let mut out=input.clone();out.count=count+put;set(v,inv,slot,Some(out));if slot==0{unpack(v);}}put
 }
 fn merge_into(inv:&mut [Option<ItemStack>],source:&mut ItemStack,order:&[usize],max:&impl Fn(&ItemStack)->u32){
     for &i in order{if let Some(s)=inv[i].as_mut().filter(|s|s.same_item_same_components(source)){let n=source.count.min(max(s).saturating_sub(s.count));s.count+=n;source.count-=n;}}

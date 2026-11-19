@@ -22,7 +22,7 @@ fn quads(game:&Game<'_>,block:&str,open:&str,frame:Option<&Tag>)->Vec<ModelQuad>
         let Some(baked)=game.pack.render.model_catalog.standalone(model)else{continue;};
         let replacement=if role=="shading"{None}else{frame.and_then(|f|particle(game,f,role))};
         for f in &baked.faces{let mut q=f.quad.clone();
-            if let Some((sprite,translucent))=&replacement{q.material.sprite=sprite.clone();q.material.force_translucent=*translucent;}
+            if let Some((sprite,translucent))=&replacement{q.material.sprite=sprite.clone();q.material.force_translucent=*translucent&&storagedrawers_engine::config::boolean("framed_translucent_materials",true);}
             if role=="shading"{q.material.force_translucent=true;}
             q.render_type=Some(if q.material.force_translucent{horizon_assets::bake::RenderType::Translucent}else{horizon_assets::bake::RenderType::CutoutMipped});
             out.push(q);
@@ -58,6 +58,38 @@ fn hopper_quads(game:&Game<'_>)->Vec<ModelQuad>{
         q.render_type=Some(horizon_assets::bake::RenderType::CutoutMipped);q
     }).collect()).unwrap_or_default()
 }
+fn indicator_quads(game:&Game<'_>,block:&str,g:&storagedrawers_engine::Group)->Vec<ModelQuad>{
+    if !g.has(storagedrawers_engine::Upgrade::FillLevel){return Vec::new();}
+    let depth=if block.contains("half"){"half"}else{"full"};
+    let n=block.rsplit('_').next().unwrap_or("1");
+    let model=if block.contains("compacting"){format!("storagedrawers:block/{depth}_compdrawers_{n}_indicator")}
+        else{format!("storagedrawers:block/{depth}_drawers_indicator_{n}")};
+    game.pack.render.model_catalog.standalone(&model).map(|m|m.faces.iter().map(|f|f.quad.clone()).collect()).unwrap_or_default()
+}
+fn opaque_frame(game:&Game<'_>,frame:&Tag)->bool{
+    ["side","trim","front"].into_iter().all(|role|particle(game,frame,role).is_some_and(|(_,transparent)|!transparent))
+}
+fn smooth_light(game:&Game<'_>,pos:[i32;3],q:&ModelQuad,own_shade:Option<f32>)->([f32;4],[u32;4]){
+    use super::sd_lighting::Sample;
+    let state=game.world.block(pos[0],pos[1],pos[2]);
+    let full=game.pack.context.tables.facts(state).is_some_and(|f|f.full_collision);
+    let shape=horizon_client::models::catalog::QuadShape::new(&q.positions,q.facing,full);
+    let sample=|offset:[i32;3]|{
+        let at:[i32;3]=std::array::from_fn(|i|pos[i]+offset[i]);
+        let state=game.world.block(at[0],at[1],at[2]);let facts=game.pack.context.tables.facts(state);
+        let light=game.world.light(at[0],at[1],at[2]);
+        let mut shade=facts.map_or(1.,|f|f.shade);
+        if let Some(horizon_client::containers::BlockEntity::Mod(m))=game.world.block_entities.get(&(at[0],at[1],at[2])){
+            if let Some(frame)=m.nbt.get(&"sd_frame".into()){shade=if !m.id.contains("half")&&opaque_frame(game,frame){0.8}else{1.};}
+        }
+        if offset==[0;3]{if let Some(value)=own_shade{shade=value;}}
+        Sample{light:if facts.is_some_and(|f|f.emissive){0x00F0_00F0}else{
+            u32::from((light&15).max(facts.map_or(0,|f|f.emission)))<<4|u32::from(light>>4)<<20},
+            shade,permeable:facts.is_none_or(|f|f.light_permeable),solid:facts.is_some_and(|f|f.solid_render)}
+    };
+    let (ao,light)=super::sd_lighting::quad(&shape,q.facing,sample([0;3]),sample);
+    (ao,light.map(|v|((v>>16)&0xFF)|((v&0xFF)<<8)))
+}
 // The centre of an opaque placed block has no sky light. Terrain faces are
 // lit from the space outside the face, not from that dark interior cell.
 fn face_light(game:&Game<'_>,pos:[i32;3],q:&ModelQuad)->u32{
@@ -85,14 +117,16 @@ fn visible(game:&Game<'_>,pos:[i32;3],q:&ModelQuad)->bool{
     let Ok(own)=VoxelShape::from_box(Aabb::new(Vec3::new(min[0],min[1],min[2]),Vec3::new(max[0],max[1],max[2])))else{return true;};
     own.join_is_not_empty(shape,ShapeOp::ONLY_FIRST).unwrap_or(true)
 }
-fn draw_quads(game:&Game<'_>,pos:[i32;3],draw:&mut super::native_block_entity_draw::BlockEntityDraw,quads:Vec<ModelQuad>){
+fn draw_quads(game:&Game<'_>,pos:[i32;3],draw:&mut super::native_block_entity_draw::BlockEntityDraw,quads:Vec<ModelQuad>,own_shade:Option<f32>){
     use horizon_client::item_render::{WorldSink,ItemSink,ItemQuad,Foil};
     use horizon_assets::model::Direction as D;
     let pose=draw.pose();
     for q in quads{
         if !visible(game,pos,&q){continue;}
         let Some(sprite)=game.gui.atlas.sprites.get(&q.material.sprite)else{continue;};
-        let shade:u32=if !q.shade{255}else{match q.facing{D::Up=>255,D::Down=>127,D::North|D::South=>204,D::West|D::East=>153}};
+        let shade:u32=if !q.shade{255}else{match q.facing{D::Up|D::Down if game.nether_lighting()=>229,D::Up=>255,D::Down=>127,D::North|D::South=>204,D::West|D::East=>153}};
+        let smooth=(game.settings.smooth_lighting&&q.shade&&q.light_emission==0).then(||smooth_light(game,pos,&q,own_shade));
+        let start=draw.vertices_mut().len();
         let mut sink=WorldSink{out:draw.vertices_mut(),light:face_light(game,pos,&q),lights:None,glint:None,tier:0};
         sink.quad(ItemQuad{
             pos:q.positions.map(|p|pose.transform_point3(glam::Vec3::from_array(p))),
@@ -104,6 +138,10 @@ fn draw_quads(game:&Game<'_>,pos:[i32;3],draw:&mut super::native_block_entity_dr
                 Some(horizon_assets::bake::RenderType::Solid|horizon_assets::bake::RenderType::Cutout|horizon_assets::bake::RenderType::CutoutMipped)=>false,
                 _=>q.material.force_translucent||game.gui.atlas.translucent.contains(&q.material.sprite)},oit:false,
         });
+        if let Some((ao,lights))=smooth{for (i,vertex) in draw.vertices_mut()[start..].iter_mut().enumerate(){
+            let value=((ao[i]*255.).floor()as u32*shade/255).min(255);
+            vertex.color=0xFF00_0000|value<<16|value<<8|value;vertex.light=lights[i];
+        }}
     }
 }
 pub(super) fn render(game:&Game<'_>,pos:[i32;3],block:&str,m:&ModBlockEntity,draw:&mut super::native_block_entity_draw::BlockEntityDraw){
@@ -120,7 +158,7 @@ pub(super) fn render(game:&Game<'_>,pos:[i32;3],block:&str,m:&ModBlockEntity,dra
     // Geometry remains in world orientation for directional terrain light.
     let angle:f32=match facing.as_str(){"east"=>-90.,"south"=>-180.,"west"=>-270.,_=>0.};
     let mut geometry=if frame.is_some(){quads(game,block,open(g.as_ref()),frame)}else{Vec::new()};
-    if let Some(g)=&g{geometry.extend(badges(game,block,g));}
+    if let Some(g)=&g{geometry.extend(badges(game,block,g));geometry.extend(indicator_quads(game,block,g));}
     if !geometry.is_empty(){
         // Rotate both positions and facing; rotating only the pose would
         // sample north light even when the drawer faces east or west.
@@ -133,10 +171,10 @@ pub(super) fn render(game:&Game<'_>,pos:[i32;3],block:&str,m:&ModBlockEntity,dra
                 q.facing=turn(q.facing);q.cull=q.cull.map(turn);
             }
         }
-        draw_quads(game,pos,draw,geometry);
+        draw_quads(game,pos,draw,geometry,frame.map(|f|if !block.contains("half")&&opaque_frame(game,f){0.8}else{1.}));
     }
     if g.as_ref().is_some_and(|g|g.has(storagedrawers_engine::Upgrade::Hopper)){
-        draw_quads(game,pos,draw,hopper_quads(game));
+        draw_quads(game,pos,draw,hopper_quads(game),None);
     }
     draw.push();draw.rotate_about([0.,1.,0.],match facing.as_str(){"east"=>-90.,"south"=>-180.,"west"=>-270.,_=>0.},[0.5,0.5,0.5]);
     if let Some(g)=&g{if g.compact.is_none(){for (slot,d) in g.drawers.iter().enumerate(){if d.detached{game.native_draw_model(draw,&missing(block,slot),0xFFFFFF);}}}}
@@ -147,6 +185,7 @@ pub(super) fn item(game:&Game<'_>,stack:&ItemStack,display:DisplayContext,owner:
     let frame=data::frame(stack);let g=data::group(stack);
     let detached=g.as_ref().is_some_and(|g|g.drawers.iter().any(|d|d.detached));
     let mut extra=g.as_ref().map(|g|badges(game,&stack.item,g)).unwrap_or_default();
+    if let Some(g)=&g{extra.extend(indicator_quads(game,&stack.item,g));}
     if g.as_ref().is_some_and(|g|g.has(storagedrawers_engine::Upgrade::Hopper)){extra.extend(hopper_quads(game));}
     if frame.is_none()&&!detached&&extra.is_empty(){return None;}
     let mut plain=stack.clone();let mut c=data::custom(&plain);c.remove(&"sd_frame".into());c.remove(&"sd_contents".into());data::set_custom(&mut plain,c);

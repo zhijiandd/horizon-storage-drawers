@@ -1,0 +1,11 @@
+[package]
+name = "storagedrawers"
+version = "0.3.7"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+horizon-mod-api = { path=".horizon/sdk/api/crates/horizon-mod-api" }
+serde_json = "1"
+storagedrawers-recipe-engine = { path="src/engine" }

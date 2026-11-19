@@ -9,7 +9,7 @@ RES=REF/'common/src/main/resources'
 BUNDLE=ROOT/'native/mixins/storagedrawers'
 CONTENT=ROOT/'content'
 REV='9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0'
-VERSION='0.2.7'
+VERSION='0.2.8'
 
 def normalize_loot(value):
     # Horizon's runtime condition codec uses `type`; copied Java loot uses
@@ -293,6 +293,9 @@ def generate():
         for n in [1,2,4]:
             for slot in range(1,n+1):all_models.add(f'storagedrawers:block/{depth}_drawers_missing_{n}_{slot}')
     decoration_models=[]
+    for depth in ['full','half']:
+        for n in [1,2,4]:all_models.add(f'storagedrawers:block/{depth}_drawers_indicator_{n}')
+        for n in [2,3]:all_models.add(f'storagedrawers:block/{depth}_compdrawers_{n}_indicator')
     for half in [False,True]:
         props={'facing':'north','half':str(half).lower()}
         for role in ['lock','claim','lock_claim']:

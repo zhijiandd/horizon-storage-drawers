@@ -95,5 +95,7 @@ pub fn decode(bytes:&[u8])->Result<Group,Error>{
     a.owner=r.owner()?;let n=r.length(4096)?;a.trusted=BTreeSet::new();
     for _ in 0..n{a.trusted.insert(u128::from_le_bytes(r.take(16)?.try_into().map_err(|_|Error::InvalidData)?));}
     if r.flag()?{g.frame=Some(Frame{side:r.text()?,trim:r.text()?,front:r.text()?});}
-    if r.at!=end||!g.within_capacity(){return Err(Error::InvalidData);}Ok(g)
+    // Config reductions must not make existing stock unreadable. Capacity
+    // admission is enforced on insertion/upgrades; saved counts retain hard bounds.
+    if r.at!=end||g.drawers.iter().any(|d|d.count>MAX_COUNT)||g.compact.as_ref().is_some_and(|c|c.units>MAX_COUNT){return Err(Error::InvalidData);}Ok(g)
 }

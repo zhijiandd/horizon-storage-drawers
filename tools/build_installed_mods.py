@@ -16,14 +16,23 @@ parser.add_argument('--launcher-home', type=Path, default=os.environ.get('HORIZO
 parser.add_argument('--launcher', type=Path, required=True, help='path to the Horizon launcher executable')
 parser.add_argument('--base-version', required=True, help='installed Horizon base version to build against')
 parser.add_argument('--instance', default='horizon')
+parser.add_argument('--profile', help='optional launcher-supported build profile; omit to use its default')
+parser.add_argument('--offline', action='store_true', help='use only cached Cargo dependencies')
 args = parser.parse_args()
 game = Path(args.game_dir).expanduser().resolve()
 launcher_home = Path(args.launcher_home).expanduser().resolve()
 launcher = args.launcher.expanduser().resolve()
 if not launcher.is_file() or not game.is_dir() or not launcher_home.is_dir():
     parser.error('launcher executable, game directory, and launcher home must exist')
+help_result = subprocess.run([str(launcher), 'native-build', '--help'], capture_output=True,
+                             text=True, encoding='utf-8', errors='replace', timeout=30)
+if 'horizon-mixin.toml' not in help_result.stdout:
+    parser.error('This package uses legacy source mixins. The selected launcher uses the new SDK format; '
+                 'pass a compatible legacy build tool via --launcher. Do not replace the installed launcher.')
 os.environ.update(HORIZON_LAUNCHER_HOME=str(launcher_home), HORIZON_HOME=str(game),
                   HORIZON_LAUNCHER_NO_SELF_UPDATE='1')
+if args.offline:
+    os.environ['CARGO_NET_OFFLINE'] = 'true'
 version = json.loads((root / 'native/horizon-native.json').read_text('utf-8'))['version']
 flags = dict(line.split(':', 1) for line in (game / 'horizon-mods.txt').read_text('utf-8').splitlines() if ':' in line)
 # An explicit checked bundle folder prevents the launcher's registry fallback
@@ -49,7 +58,9 @@ for package in sorted((game / 'horizon-native-mods').glob('*.hnmod')):
             target.write_bytes(archive.read(name))
 command = [str(launcher), 'native-build', str(snapshot),
         '--instance', args.instance, '--version', args.base_version,
-        '--profile', 'dev', '--trust-native-code']
+        '--trust-native-code']
+if args.profile:
+    command.extend(['--profile', args.profile])
 process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            text=True, encoding='utf-8', errors='replace', start_new_session=os.name != 'nt')
 announced_compiling = False

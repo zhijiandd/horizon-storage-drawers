@@ -41,9 +41,10 @@ impl Upgrade {
         Self::Balance, Self::Portability, Self::Hopper, Self::Magnet1, Self::Magnet2,
         Self::Magnet3, Self::Remote, Self::RemoteGroup];
     pub fn multiplier(self) -> Option<u64> {
-        Some(match self { Self::Obsidian=>2, Self::Copper=>4, Self::Iron=>8,
-            Self::Gold=>16, Self::Emerald=>64, Self::Diamond=>256, Self::Netherite=>2048,
-            _=>return None })
+        let index=match self{Self::Obsidian=>0,Self::Copper=>1,Self::Iron=>2,Self::Gold=>3,
+            Self::Emerald=>4,Self::Diamond=>5,Self::Netherite=>6,_=>return None};
+        Some(crate::config::number(&crate::config::features()["storage_multipliers"][index],
+            [2,4,8,16,64,256,2048][index],1,MAX_COUNT))
     }
     pub fn id(self) -> &'static str {
         match self { Self::Obsidian=>"obsidian_storage_upgrade", Self::Copper=>"copper_storage_upgrade",
@@ -54,7 +55,7 @@ impl Upgrade {
             Self::CreativeVending=>"creative_vending_upgrade", Self::Conversion=>"conversion_upgrade",
             Self::Redstone=>"redstone_upgrade", Self::MinRedstone=>"min_redstone_upgrade",
             Self::MaxRedstone=>"max_redstone_upgrade", Self::Illumination=>"illumination_upgrade",
-            Self::FillLevel=>"fill_level_upgrade", Self::Balance=>"balanced_fill_upgrade",
+            Self::FillLevel=>"fill_level_upgrade", Self::Balance=>"balance_fill_upgrade",
             Self::Portability=>"portability_upgrade", Self::Hopper=>"hopper_upgrade",
             Self::Magnet1=>"magnet_upgrade", Self::Magnet2=>"magnet_upgrade_2",
             Self::Magnet3=>"magnet_upgrade_3", Self::Remote=>"remote_upgrade",
@@ -62,7 +63,7 @@ impl Upgrade {
     }
     pub fn from_id(id: &str) -> Option<Self> {
         let id = id.strip_prefix("storagedrawers:").unwrap_or(id);
-        let id=match id{"balance_fill_upgrade"=>"balanced_fill_upgrade","remote_upgrade_bound"=>"remote_upgrade",
+        let id=match id{"balanced_fill_upgrade"=>"balance_fill_upgrade","remote_upgrade_bound"=>"remote_upgrade",
             "remote_group_upgrade_bound"=>"remote_group_upgrade",v=>v};
         Self::ALL.into_iter().find(|u| u.id()==id)
     }
@@ -158,12 +159,31 @@ impl Group {
         self.upgrades.iter().filter_map(|u|u.multiplier()).sum::<u64>().max(1)
     }
     pub fn base_stacks(&self)->u64 {
-        let total=if self.half{16}else{32};
-        if self.compact.is_some(){total}else{total/self.drawers.len() as u64}
+        self.base_stacks_for(self.compact.is_some())
+    }
+    fn base_stacks_for(&self, compacting: bool) -> u64 {
+        let config=crate::config::features();
+        let units=if compacting{crate::config::uint(if self.half{"half_compacting_units"}else{"compacting_units"},if self.half{16}else{32},1,65536)}
+            else{let index=match self.drawers.len(){4=>2,2=>1,_=>0};
+                crate::config::number(&config[if self.half{"half_drawer_units"}else{"full_drawer_units"}][index],
+                    (if self.half{16}else{32})/self.drawers.len()as u64,1,65536)};
+        units.saturating_mul(crate::config::uint("base_stack_storage",1,1,65536))
+    }
+    pub fn upgraded_stacks(&self) -> u64 {
+        self.upgraded_stacks_for(self.compact.is_some())
+    }
+    pub fn upgraded_stacks_for(&self, compacting: bool) -> u64 {
+        let base = if self.has(Upgrade::OneStack) { 1 } else { self.base_stacks_for(compacting) };
+        base.saturating_mul(self.multiplier())
     }
     pub fn item(&self,slot:usize)->Option<&ItemKey>{
         if self.drawers.get(slot)?.detached{return None;}
         if let Some(c)=&self.compact {Some(&c.views.get(slot)?.0)}else{self.drawers[slot].item.as_ref()}
+    }
+    pub fn has_inventory_data(&self) -> bool {
+        self.drawers.iter().enumerate().any(|(slot, drawer)| {
+            drawer.detached || self.item(slot).is_some() || drawer.count > 0
+        })
     }
     pub fn count(&self,slot:usize)->u64 {
         if self.drawers.get(slot).is_none_or(|d|d.detached){return 0;}
@@ -175,7 +195,7 @@ impl Group {
         if self.has(Upgrade::CreativeStorage)||self.has(Upgrade::CreativeVending){
             return self.compact.as_ref().map_or(MAX_COUNT,|c|MAX_COUNT/c.views[slot].1);
         }
-        let stacks=if self.has(Upgrade::OneStack){self.multiplier()}else{self.base_stacks().saturating_mul(self.multiplier())};
+        let stacks = self.upgraded_stacks();
         let cap=stacks.saturating_mul(u64::from(self.compact.as_ref().map_or(item.max_stack,|c|c.views[0].0.max_stack)));
         if let Some(c)=&self.compact {
             cap.saturating_mul(c.views[0].1).min(MAX_COUNT)/c.views[slot].1
@@ -184,6 +204,14 @@ impl Group {
     fn compact_unit_capacity(&self)->u64{
         let Some(c)=&self.compact else{return 0;};
         self.capacity(0,&c.views[0].0).saturating_mul(c.views[0].1)
+    }
+    pub fn remaining_capacity(&self, slot: usize, item: &ItemKey) -> u64 {
+        if self.drawers.get(slot).is_none_or(|drawer| drawer.detached) { return 0; }
+        if let Some(compact) = &self.compact {
+            self.compact_unit_capacity().saturating_sub(compact.units) / compact.views[slot].1
+        } else {
+            self.capacity(slot, self.item(slot).unwrap_or(item)).saturating_sub(self.count(slot))
+        }
     }
     pub fn check(&self,access:Access)->Result<(),Error>{
         if !self.attributes.permits(access){
@@ -205,19 +233,34 @@ impl Group {
     pub fn insert_with_conversion(&mut self,slot:usize,stack:&Stack,access:Access,simulate:bool,
         conversion:&impl Fn(&ItemKey,&ItemKey)->bool)->Result<Inserted,Error>{
         self.check(access)?; self.match_slot(slot,&stack.item,conversion)?;
+        if !crate::config::can_store(&stack.item.id){return Err(Error::Incompatible);}
+        if access==Access::Automation && self.attributes.locked && self.item(slot).is_none(){return Err(Error::Denied);}
         if stack.count==0{return Ok(Inserted::default());}
-        let cap=self.capacity(slot,self.item(slot).unwrap_or(&stack.item));
-        let room=if let Some(c)=&self.compact {
-            self.compact_unit_capacity().saturating_sub(c.units)/c.views[slot].1
-        }else{cap.saturating_sub(self.count(slot))};
+        let room = self.remaining_capacity(slot, &stack.item);
         let stored=stack.count.min(room);
         let voided=if self.has(Upgrade::Void){stack.count-stored}else{0};
         if !simulate && stored>0{
             if let Some(c)=&mut self.compact {c.units+=stored*c.views[slot].1;}
             else{let d=&mut self.drawers[slot]; if d.item.is_none(){d.item=Some(stack.item.clone());} d.count+=stored;}
         }
-        if !simulate && self.has(Upgrade::Balance){self.balance();}
+        if !simulate && self.has(Upgrade::Balance)&&!self.has(Upgrade::CreativeVending)&&!self.attributes.suspended{self.balance();}
         Ok(Inserted{stored,voided})
+    }
+    /// Shared repository intake: every slot's real capacity precedes void overflow.
+    pub fn insert_all(&mut self,targets:&[usize],stack:&Stack,access:Access,simulate:bool,
+        conversion:&impl Fn(&ItemKey,&ItemKey)->bool)->Inserted{
+        if simulate{return self.clone().insert_all(targets,stack,access,false,conversion);}
+        let mut result=Inserted::default();let mut remaining=stack.count;
+        for overflow in [false,true]{for &slot in targets{
+            if remaining==0{break;}if slot>=self.drawers.len(){continue;}
+            let amount=if overflow{remaining}else{
+                self.capacity(slot,self.item(slot).unwrap_or(&stack.item)).saturating_sub(self.count(slot)).min(remaining)
+            };
+            if amount==0{continue;}
+            if let Ok(put)=self.insert_with_conversion(slot,&Stack{item:stack.item.clone(),count:amount},access,false,conversion){
+                result.stored+=put.stored;result.voided+=put.voided;remaining-=put.accepted();
+            }
+        }}result
     }
     pub fn extract(&mut self,slot:usize,count:u64,access:Access,simulate:bool)->Result<Option<Stack>,Error>{
         self.check(access)?;
@@ -230,7 +273,7 @@ impl Group {
         if !simulate&&!vending{
             if let Some(c)=&mut self.compact{c.units-=taken*c.views[slot].1;}
             else{self.drawers[slot].count-=taken; self.clear_empty(slot);}
-            if self.has(Upgrade::Balance){self.balance();}
+            if self.has(Upgrade::Balance)&&!self.attributes.suspended{self.balance();}
         }
         Ok(Some(Stack{item,count:taken}))
     }
@@ -239,10 +282,13 @@ impl Group {
     }
     pub fn add_upgrade(&mut self,u:Upgrade,access:Access)->Result<(),Error>{
         self.check(access)?;
+        if self.upgrades_locked_by_missing_drawer() { return Err(Error::Detached); }
         if self.upgrades.len()>=UPGRADE_SLOTS{return Err(Error::UpgradeSlots);}
         if self.upgrades.iter().any(|&v|u.exclusive(v)){return Err(Error::DuplicateUpgrade);}
         let mut changed=self.clone(); changed.upgrades.push(u);
-        if !changed.within_capacity(){return Err(Error::CapacityInUse);}
+        // A capacity-reducing upgrade must fit the stock. Other upgrades may
+        // still be installed after an administrator lowered capacity in config.
+        if u == Upgrade::OneStack && !changed.within_capacity(){return Err(Error::CapacityInUse);}
         *self=changed; Ok(())
     }
     /// Shared SlotUpgrade admission, used before both client prediction and
@@ -260,17 +306,23 @@ impl Group {
     }
     pub fn remove_upgrade(&mut self,slot:usize,access:Access)->Result<Upgrade,Error>{
         self.check(access)?;
+        if self.upgrades_locked_by_missing_drawer() { return Err(Error::Detached); }
         let u=*self.upgrades.get(slot).ok_or(Error::Slot)?;
         let mut changed=self.clone(); changed.upgrades.remove(slot);
         if !changed.within_capacity(){return Err(Error::CapacityInUse);}
         *self=changed; Ok(u)
+    }
+    pub fn upgrades_locked_by_missing_drawer(&self) -> bool {
+        self.drawers.iter().any(|drawer| drawer.detached)
+            && crate::config::boolean("detached_force_capacity_check", false)
     }
     pub fn within_capacity(&self)->bool{
         if let Some(c)=&self.compact{return c.units<=self.compact_unit_capacity();}
         self.drawers.iter().enumerate().all(|(s,d)|d.item.as_ref().is_none_or(|i|d.count<=self.capacity(s,i)))
     }
     pub fn use_key(&mut self,key:Key,actor:u128)->Result<(),Error>{
-        self.check(Access::Player(actor))?;
+        // Java's unlock key deliberately works for a different owner.
+        if key!=Key::UnlockPersonal{self.check(Access::Player(actor))?;}
         match key{
             Key::Lock=>{self.attributes.locked=!self.attributes.locked;if !self.attributes.locked{
                 for s in 0..self.drawers.len(){self.clear_empty(s);}}},
@@ -283,7 +335,7 @@ impl Group {
         } Ok(())
     }
     pub fn balance(&mut self){
-        if self.compact.is_some(){return;}
+        if self.compact.is_some()||self.has(Upgrade::CreativeVending)||self.attributes.suspended{return;}
         let mut done=BTreeSet::new();
         for i in 0..self.drawers.len(){
             if done.contains(&i)||self.drawers[i].detached{continue;}
@@ -332,13 +384,23 @@ impl Group {
         self.magnet_range()[0]
     }
     pub fn magnet_range(&self)->[u32;3]{
-        let mut range=[0,0,0];
-        for upgrade in &self.upgrades{let r=match upgrade{Upgrade::Magnet1=>[1,1,0],Upgrade::Magnet2=>[4,2,0],Upgrade::Magnet3=>[8,3,0],_=>[0,0,0]};
-            for i in 0..3{range[i]+=r[i];}}
-        [range[0].min(24),range[1].min(8),range[2].min(0)]
+        let config=crate::config::features();let mut range=[0u32;3];
+        for upgrade in &self.upgrades{let tier=match upgrade{Upgrade::Magnet1=>0,Upgrade::Magnet2=>1,Upgrade::Magnet3=>2,_=>continue};
+            for i in 0..3{let r=crate::config::number(&config["magnet_ranges"][tier][i],[[1,1,0],[4,2,0],[8,3,0]][tier][i],0,512)as u32;
+                range[i]=range[i].saturating_add(if crate::config::boolean("magnet_additive_range",true){r}else{range[i].max(r)});}}
+        std::array::from_fn(|i|range[i].min(crate::config::number(&config["magnet_max_range"][i],[24,8,0][i],0,512)as u32))
     }
     pub fn magnet_interval(&self)->u64{
-        if self.has(Upgrade::Magnet3){5}else if self.has(Upgrade::Magnet2){10}else{20}
+        let tier=if self.has(Upgrade::Magnet3){2}else if self.has(Upgrade::Magnet2){1}else{0};
+        crate::config::number(&crate::config::features()["magnet_active_ticks"][tier],[20,10,5][tier],1,72000)
+    }
+    pub fn magnet_idle_interval(&self)->u64{
+        let tier=if self.has(Upgrade::Magnet3){2}else if self.has(Upgrade::Magnet2){1}else{0};
+        crate::config::number(&crate::config::features()["magnet_idle_ticks"][tier],20,1,72000)
+    }
+    /// Check before assigning compacting prototypes, so assignment cannot bypass LOCK_EMPTY.
+    pub fn can_initialize(&self,access:Access)->bool{
+        self.check(access).is_ok()&&!(access==Access::Automation&&self.attributes.locked&&self.item(0).is_none())
     }
 }
 

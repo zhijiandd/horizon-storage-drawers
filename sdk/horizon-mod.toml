@@ -1,0 +1,188 @@
+id = "storagedrawers"
+name = "储物抽屉"
+version = "0.3.7"
+description = "储物抽屉、压缩储物与控制器网络。"
+authors = ["Justin Aquadro", "Horizon port contributors"]
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
+
+[[native.module]]
+id = "appearance"
+file = "crates/horizon-client/src/game/modding/native_block_entity_draw.rs"
+name = "sd_appearance"
+source = "src/native/appearance.rs"
+
+[[native.module]]
+id = "labels"
+file = "crates/horizon-client/src/game/modding/native_block_entity_draw.rs"
+name = "sd_labels"
+source = "src/native/labels.rs"
+
+[[native.module]]
+id = "lighting"
+file = "crates/horizon-client/src/game/modding/native_block_entity_draw.rs"
+name = "sd_lighting"
+source = "src/native/lighting.rs"
+
+[[native.module]]
+id = "geometry"
+file = "crates/horizon-client/src/game/modding/native_block_entity_draw.rs"
+name = "sd_geometry"
+source = "src/native/geometry.rs"
+
+[[native.module]]
+id = "appearance_items"
+file = "crates/horizon-client/src/game/modding/native_block_entity_draw.rs"
+name = "sd_items"
+source = "src/native/items.rs"
+
+[[native.mixin]]
+id = "drawer_break_prediction"
+target = "horizon_client::game::remote::break_prediction::Game::predict_break"
+kind = "HEAD"
+cancellable = true
+helper = "src/native/break_prediction.rs"
+bindings = [
+    { name = "game", ty = "&Game<'_>", value = "&*self" },
+    { name = "pos", ty = "[i32; 3]", value = "pos" },
+]
+
+[[native.mixin]]
+id = "framing_placement"
+target = "horizon_client::game::level_access::<GameLevel as LevelAccess>::before_state_for_placement"
+kind = "HEAD"
+cancellable = true
+helper = "src/native/framing_placement.rs"
+bindings = [
+    { name = "level", ty = "&GameLevel<'_>", value = "self" },
+    { name = "state", ty = "BlockStateId", value = "state" },
+    { name = "context", ty = "&PlacementContext", value = "context" },
+    { name = "answer", ty = "&mut Option<Option<BlockStateId>>", value = "&mut *answer" },
+]
+
+[[native.mixin]]
+id = "framing_prediction"
+target = "horizon_client::game::remote::Game::remote_can_place"
+kind = "RETURN"
+helper = "src/native/framing_prediction.rs"
+bindings = [
+    { name = "placed", ty = "Option<DryPlace>", value = "$value" },
+    { name = "game", ty = "&Game<'_>", value = "&*self" },
+    { name = "stack", ty = "&ItemStack", value = "stack" },
+]
+
+[[native.mixin]]
+id = "world_appearance"
+target = "horizon_client::game::api_values::super::Game::api_block_entity_submit"
+kind = "HEAD"
+helper = "src/native/world_appearance.rs"
+bindings = [
+    { name = "game", ty = "&super::Game<'_>", value = "self" },
+    { name = "pos", ty = "[i32;3]", value = "pos" },
+    { name = "block", ty = "&str", value = "block" },
+    { name = "entity", ty = "&crate::containers::ModBlockEntity", value = "entity" },
+    { name = "draw", ty = "&mut super::native_block_entity_draw::BlockEntityDraw", value = "&mut *draw" },
+]
+
+[[native.mixin]]
+id = "item_appearance"
+target = "horizon_client::game::item_draw::Game::resolve_item_in_hand"
+kind = "RETURN"
+helper = "src/native/item_appearance.rs"
+bindings = [
+    { name = "game", ty = "&Game<'_>", value = "self" },
+    { name = "stack", ty = "&ItemStack", value = "stack" },
+    { name = "state", ty = "ItemRenderState", value = "$value" },
+]
+
+[[native.mixin]]
+id = "predicted_components"
+target = "horizon_client::game::block_items::Game::apply_placed_item"
+kind = "RETURN"
+helper = "src/native/predicted_components.rs"
+bindings = [
+    { name = "game", ty = "&mut Game<'_>", value = "&mut *self" },
+    { name = "pos", ty = "[i32;3]", value = "pos" },
+    { name = "stack", ty = "&ItemStack", value = "stack" },
+    { name = "result", ty = "()", value = "$value" },
+]
+
+[[native.mixin]]
+id = "virtual_menu_prediction"
+target = "horizon_client::game::remote::predict_clicks"
+kind = "HEAD"
+cancellable = true
+helper = "src/native/menu_prediction.rs"
+bindings = [
+    { name = "menu", ty = "&mut horizon_client::menu::Menu", value = "&mut *m" },
+    { name = "clicks", ty = "&[(i16, i32, Input)]", value = "clicks" },
+]
+
+[[native.mixin]]
+id = "creative_hover_page"
+target = "horizon_client::game::creative_screen::Game::tooltip"
+kind = "HEAD"
+cancellable = true
+helper = "src/native/creative_hover_page.rs"
+bindings = [
+    { name = "game", ty = "&Game<'_>", value = "&*self" },
+    { name = "batch", ty = "&HudBatch", value = "&*batch" },
+    { name = "text", ty = "&str", value = "text" },
+    { name = "x", ty = "f32", value = "x" },
+    { name = "y", ty = "f32", value = "y" },
+]
+
+[[native.mixin]]
+id = "menu_actor"
+target = "horizon_client::game::native_hooks::Game::native_acting_id"
+kind = "RETURN"
+helper = "src/native/menu_actor.rs"
+bindings = [
+    { name = "actor", ty = "u128", value = "$value" },
+    { name = "game", ty = "&Game<'_>", value = "&*self" },
+]
+
+[[native.mixin]]
+id = "player_inventory_pickup"
+target = "horizon_client::game::native_hooks::base::Game::native_menu_clicked"
+kind = "HEAD"
+cancellable = true
+helper = "src/native/menu_pickup.rs"
+bindings = [
+    { name = "game", ty = "&mut Game<'_>", value = "&mut *self" },
+    { name = "uuid", ty = "u128", value = "uuid" },
+    { name = "window", ty = "i32", value = "window" },
+    { name = "slot", ty = "i32", value = "slot" },
+    { name = "button", ty = "i32", value = "button" },
+    { name = "mode", ty = "i32", value = "mode" },
+]
+
+[[native.mixin]]
+id = "drop_storage"
+target = "horizon_client::game::api_values::super::GameLevel::api_pre_remove_side_effects"
+kind = "HEAD"
+helper = "src/native/drop_storage.rs"
+bindings = [
+    { name = "entity", ty = "&crate::containers::ModBlockEntity", value = "entity" },
+    { name = "drops", ty = "&mut Vec<EngineStack>", value = "&mut *drops" },
+]
+
+[[native.mixin]]
+id = "framing_materials_server"
+target = "horizon_client::game::native_hooks::base::Game::native_server_about_to_start"
+kind = "HEAD"
+helper = "src/native/framing_materials.rs"
+bindings = [{ name = "game", ty = "&Game<'_>", value = "&*self" }]
+
+[[native.mixin]]
+id = "framing_materials_client"
+target = "horizon_client::game::native_hooks::base::Game::native_client_resources_reloaded"
+kind = "HEAD"
+helper = "src/native/framing_materials.rs"
+bindings = [{ name = "game", ty = "&Game<'_>", value = "&*self" }]

@@ -27,8 +27,11 @@ pub(crate) fn upgrade_items(c:&Compound,g:&sd::Group,positions:&[usize])->Vec<It
     g.upgrades.iter().zip(positions).map(|(&u,&pos)|{
         let mut item=items.iter().find(|v|matches!(v.get("slot"),Some(Tag::Int(p))if *p==pos as i32))
             .and_then(|v|item_from_nbt(v.get("item")?)).filter(|s|upgrade(s)==Some(u))
-            .unwrap_or_else(||ItemStack::new(&format!("storagedrawers:{}",u.id()),1));item.count=1;item
+            .unwrap_or_else(||ItemStack::new(&format!("storagedrawers:{}",u.id()),1));item.count=1;canonical_upgrade(item)
     }).collect()
+}
+pub(crate) fn canonical_upgrade(mut item:ItemStack)->ItemStack{
+    if &*item.item=="storagedrawers:balanced_fill_upgrade"{item.item="storagedrawers:balance_fill_upgrade".into();}item
 }
 pub(crate) fn save_group(s:&mut ItemStack,g:&sd::Group,positions:&[usize],items:&[ItemStack])->Option<()>{
     if positions.len()!=g.upgrades.len()||items.len()!=positions.len(){return None;}
@@ -37,8 +40,7 @@ pub(crate) fn save_group(s:&mut ItemStack,g:&sd::Group,positions:&[usize],items:
     c.insert("sd_upgrade_items".into(),Tag::List(positions.iter().zip(items).map(|(&p,s)|Tag::compound([
         ("slot",Tag::Int(p as i32)),("item",item_to_nbt(s))])).collect()));
     set_custom(s,c);
-    let loaded=g.drawers.iter().enumerate().any(|(i,d)|d.detached||g.count(i)>0);
-    s.data_mut().set_other("minecraft:max_stack_size",loaded.then_some(Tag::Int(1)));Some(())
+    s.data_mut().set_other("minecraft:max_stack_size",g.has_inventory_data().then_some(Tag::Int(1)));Some(())
 }
 pub(crate) fn stock(item:&sd::ItemKey,count:u64)->Option<ItemStack>{
     let mut s=if item.components.is_empty(){ItemStack::new(&item.id,1)}else{
@@ -46,6 +48,7 @@ pub(crate) fn stock(item:&sd::ItemKey,count:u64)->Option<ItemStack>{
     };s.count=u32::try_from(count).ok()?;Some(s)
 }
 pub(crate) fn binding(s:&ItemStack)->Option<([i32;3],String)>{
+    if !matches!(upgrade(s), Some(sd::Upgrade::Remote | sd::Upgrade::RemoteGroup)) { return None; }
     let c=custom(s);let Tag::IntArray(v)=c.get(&"sd_controller".into())?else{return None;};
     let xyz:[i32;3]=v.as_slice().try_into().ok()?;
     let dim=match c.get(&"sd_dimension".into()){Some(Tag::String(d))=>d.to_string_lossy(),_=>"minecraft:overworld".into()};Some((xyz,dim))
@@ -62,9 +65,9 @@ pub(crate) fn unbound(s:&ItemStack)->ItemStack{
 // Detached payload stores stack capacity independently of the held prototype.
 pub(crate) fn detached(s:&ItemStack)->Option<(Option<ItemStack>,u64,bool)>{
     if !matches!(kind(&s.item),"detached_drawer"|"detached_drawer_full"){return None;}
-    let c=custom(s);let Some(Tag::Compound(data))=c.get(&"sd_detached".into())else{return Some((None,32,false));};
+    let c=custom(s);let Some(Tag::Compound(data))=c.get(&"sd_detached".into())else{return Some((None,sd::config::detached_stacks(),false));};
     let item=data.get(&"item".into()).and_then(item_from_nbt).filter(|s|s.count>0);
-    let capacity=match data.get(&"capacity".into()){Some(Tag::Long(v))if *v>0=>*v as u64,_=>32};
+    let capacity=match data.get(&"capacity".into()){Some(Tag::Long(v))if *v>0=>*v as u64,_=>sd::config::detached_stacks()};
     let heavy=matches!(data.get(&"heavy".into()),Some(Tag::Byte(1)));Some((item,capacity,heavy))
 }
 pub(crate) fn make_detached(item:Option<ItemStack>,capacity:u64,heavy:bool)->ItemStack{
@@ -95,7 +98,13 @@ pub(crate) fn unpack_frame(input:&ItemStack)->Option<(ItemStack,[Option<ItemStac
     let mut result=input.clone();result.item=base.item;let mut c=custom(&result);c.remove(&"sd_frame".into());set_custom(&mut result,c);
     let materials=["side","trim","front"].map(|k|data.get(k).and_then(item_from_nbt).map(|mut s|{s.count=input.count;s}));Some((result,materials))
 }
-pub(crate) fn ring_key(id:&str)->bool{let k=kind(id);k.ends_with("_key")||k.starts_with("priority_key")||matches!(k,"personal_key_unlock"|"personal_key_ftb"|"personal_key_cofh"|"drawer_puller")}
+pub(crate) fn ring_key(id: &str) -> bool {
+    matches!(id.strip_prefix("storagedrawers:"), Some(
+        "drawer_key" | "quantify_key" | "shroud_key" | "suspend_key" | "personal_key"
+        | "personal_key_unlock" | "personal_key_ftb" | "personal_key_cofh" | "drawer_puller"
+        | "priority_key" | "priority_key_p1" | "priority_key_p2" | "priority_key_n1" | "priority_key_n2"
+    ))
+}
 pub(crate) fn ring_variant(keys:&[ItemStack],active:usize)->String{
     keys.get(active).map_or_else(||"storagedrawers:keyring".into(),|s|{
         let k=kind(&s.item);let suffix=match k{"drawer_key"=>"drawer","quantify_key"=>"quantify","shroud_key"=>"shroud","suspend_key"=>"suspend",
@@ -129,9 +138,19 @@ pub(crate) fn craft(grid:&[Option<ItemStack>],size:usize)->Option<(&'static str,
     }
     if items.iter().filter(|s|detached(s).is_some()).count()==1&&items.iter().all(|s|detached(s).is_some()||upgrade(s).is_some_and(|u|u.multiplier().is_some())){
         let input=*items.iter().find(|s|detached(s).is_some())?;let (stock,capacity,heavy)=detached(input)?;
-        let added:u64=items.iter().filter_map(|s|upgrade(s).and_then(sd::Upgrade::multiplier)).sum();
-        let payload=make_detached(if added==0{None}else{stock},capacity.saturating_add(32*added),heavy&&added>0);
-        let mut out=if added==0{payload.clone()}else{let mut out=input.clone();let mut c=custom(&out);c.insert("sd_detached".into(),custom(&payload).remove(&"sd_detached".into())?);set_custom(&mut out,c);out};
+        let added: u64 = items.iter().filter_map(|s| upgrade(s).and_then(sd::Upgrade::multiplier)).sum();
+        let base = sd::Group::standard(1, false).ok()?.base_stacks();
+        let upgraded = capacity.saturating_add(base.saturating_mul(added)).min(sd::MAX_COUNT);
+        let payload = make_detached(if added == 0 { None } else { stock }, upgraded, heavy && added > 0);
+        let mut out = if added == 0 {
+            payload
+        } else {
+            let mut out = input.clone();
+            let mut components = custom(&out);
+            components.insert("sd_detached".into(), custom(&payload).remove(&"sd_detached".into())?);
+            set_custom(&mut out, components);
+            out
+        };
         // Each craft consumes one drawer and one item from each upgrade cell.
         // Copy components, never the count of the input ingredient stack.
         out.count=1;
