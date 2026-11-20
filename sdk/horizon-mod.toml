@@ -1,6 +1,6 @@
 id = "storagedrawers"
 name = "储物抽屉"
-version = "0.3.7"
+version = "0.3.8"
 description = "储物抽屉、压缩储物与控制器网络。"
 authors = ["Justin Aquadro", "Horizon port contributors"]
 api = "0.2"
@@ -9,7 +9,7 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+horizon = "5ef7734fdd854add5efd6817178be3c988d8d050"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
 
 [[native.module]]
@@ -122,20 +122,6 @@ helper = "src/native/menu_prediction.rs"
 bindings = [
     { name = "menu", ty = "&mut horizon_client::menu::Menu", value = "&mut *m" },
     { name = "clicks", ty = "&[(i16, i32, Input)]", value = "clicks" },
-]
-
-[[native.mixin]]
-id = "creative_hover_page"
-target = "horizon_client::game::creative_screen::Game::tooltip"
-kind = "HEAD"
-cancellable = true
-helper = "src/native/creative_hover_page.rs"
-bindings = [
-    { name = "game", ty = "&Game<'_>", value = "&*self" },
-    { name = "batch", ty = "&HudBatch", value = "&*batch" },
-    { name = "text", ty = "&str", value = "text" },
-    { name = "x", ty = "f32", value = "x" },
-    { name = "y", ty = "f32", value = "y" },
 ]
 
 [[native.mixin]]
