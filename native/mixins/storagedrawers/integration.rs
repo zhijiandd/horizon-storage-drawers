@@ -1219,6 +1219,9 @@ pub(super) fn render(game:&Game<'_>,pos:Pos,block:&str,m:&ModBlockEntity,draw:&m
     if !game.native_on(ID){return;}
     super::sd_appearance::render(game,pos,block,m,draw);
     if !drawer(block){return;}let Ok(g)=group(m)else{return;};
+    let Some([icons, counts, indicators, bases]) =
+        super::sd_geometry::drawer_areas(block, g.half, g.compact.is_some(), g.drawers.len())
+    else { return; };
     let Some(player)=game.player.as_ref()else{return;};
     let player_pos=[player.position.x,player.position.y,player.position.z];
     let behind=match facing(game,pos){"north"=>player_pos[2].floor()>pos[2]as f64,"south"=>player_pos[2].floor()<pos[2]as f64,
@@ -1240,7 +1243,6 @@ pub(super) fn render(game:&Game<'_>,pos:Pos,block:&str,m:&ModBlockEntity,draw:&m
     draw.rotate_about([0.,1.,0.],angle,[0.,0.,0.]);
     draw.translate([-0.5,0.,if g.half{-0.06}else{0.44}]);
     let compact=kind(block).contains("compacting");
-    let [icons,counts,indicators,bases]=super::sd_geometry::areas(compact,g.half,slots(block));
     for slot in 0..g.drawers.len(){
         let Some(i)=g.item(slot)else{continue;};let Some(s)=stack(i,1)else{continue;};
         if !g.attributes.shrouded{

@@ -1,6 +1,6 @@
 id = "storagedrawers"
 name = "储物抽屉"
-version = "0.3.8"
+version = "0.3.9"
 description = "储物抽屉、压缩储物与控制器网络。"
 authors = ["Justin Aquadro", "Horizon port contributors"]
 api = "0.2"

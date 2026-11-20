@@ -1,6 +1,33 @@
 // Generated from Storage Drawers 1.21 geometry; MIT, Justin Aquadro.
-pub(super) fn areas(compact:bool,half:bool,n:usize)->[&'static [[[f32;3];2]];4]{
-match (compact,half,n){
+type DrawerAreas = [&'static [[[f32; 3]; 2]]; 4];
+
+pub(super) fn drawer_areas(
+    block: &str,
+    saved_half: bool,
+    saved_compacting: bool,
+    drawer_count: usize,
+) -> Option<DrawerAreas> {
+    let half = block.contains("half");
+    let compact = block.contains("compacting");
+    let panel_slots: usize = block.rsplit('_').next()?.parse().ok()?;
+    // Empty compacting drawers save one ordinary slot. Once seeded, their
+    // recipe can supply any number of views up to the panel's slot count.
+    let matching_slots = match (compact, saved_compacting) {
+        (false, false) => drawer_count == panel_slots,
+        (true, false) => drawer_count == 1,
+        (true, true) => (1..=panel_slots).contains(&drawer_count),
+        (false, true) => false,
+    };
+    if half != saved_half || !matching_slots {
+        return None;
+    }
+
+    let areas = areas(compact, half, panel_slots)?;
+    areas.iter().all(|area| drawer_count <= area.len()).then_some(areas)
+}
+
+fn areas(compact: bool, half: bool, n: usize) -> Option<DrawerAreas> {
+Some(match (compact, half, n) {
 (false,false,1)=>[&[[[4.0,4.0,1.0],[12.0,12.0,16.0]]],&[[[1.0,1.0,1.0],[15.0,2.0,16.0]]],&[[[6.0,1.0,0.98],[10.0,2.0,16.0]]],&[[[6.0,1.0,0.98],[6.0,2.0,16.0]]]],
 (false,false,2)=>[&[[[6.0,10.0,1.0],[10.0,14.0,16.0]],[[6.0,2.0,1.0],[10.0,6.0,16.0]]],&[[[1.0,9.0,1.0],[15.0,10.0,16.0]],[[1.0,1.0,1.0],[15.0,2.0,16.0]]],&[[[6.0,9.0,0.98],[10.0,10.0,16.0]],[[6.0,1.0,0.98],[10.0,2.0,16.0]]],&[[[6.0,9.0,0.98],[6.0,10.0,16.0]],[[6.0,1.0,0.98],[6.0,2.0,16.0]]]],
 (false,false,4)=>[&[[[2.0,10.0,1.0],[6.0,14.0,16.0]],[[10.0,10.0,1.0],[14.0,14.0,16.0]],[[2.0,2.0,1.0],[6.0,6.0,16.0]],[[10.0,2.0,1.0],[14.0,6.0,16.0]]],&[[[1.0,9.0,1.0],[7.0,10.0,16.0]],[[9.0,9.0,1.0],[15.0,10.0,16.0]],[[1.0,1.0,1.0],[7.0,2.0,16.0]],[[9.0,1.0,1.0],[15.0,2.0,16.0]]],&[[[2.0,9.0,0.98],[6.0,10.0,16.0]],[[10.0,9.0,0.98],[14.0,10.0,16.0]],[[2.0,1.0,0.98],[6.0,2.0,16.0]],[[10.0,1.0,0.98],[14.0,2.0,16.0]]],&[[[2.0,9.0,0.98],[2.0,10.0,16.0]],[[10.0,9.0,0.98],[10.0,10.0,16.0]],[[2.0,1.0,0.98],[2.0,2.0,16.0]],[[10.0,1.0,0.98],[10.0,2.0,16.0]]]],
@@ -11,5 +38,33 @@ match (compact,half,n){
 (true,false,3)=>[&[[[6.0,10.0,1.0],[10.0,14.0,16.0]],[[2.0,2.0,1.0],[6.0,6.0,16.0]],[[10.0,2.0,1.0],[14.0,6.0,16.0]]],&[[[1.0,9.0,1.0],[15.0,10.0,16.0]],[[1.0,1.0,1.0],[7.0,2.0,16.0]],[[9.0,1.0,1.0],[15.0,2.0,16.0]]],&[[[7.0,1.0,0.98],[9.0,7.0,16.0]],[[2.0,1.0,0.98],[2.0,2.0,16.0]],[[10.0,1.0,0.98],[10.0,2.0,16.0]]],&[[[7.0,1.0,0.98],[9.0,1.0,16.0]],[[2.0,1.0,0.98],[2.0,2.0,16.0]],[[10.0,1.0,0.98],[10.0,2.0,16.0]]]],
 (true,true,2)=>[&[[[6.0,10.0,9.0],[10.0,14.0,16.0]],[[6.0,2.0,9.0],[10.0,6.0,16.0]]],&[[[1.0,9.0,9.0],[15.0,10.0,16.0]],[[1.0,1.0,9.0],[15.0,2.0,16.0]]],&[[[6.0,9.0,8.98],[10.0,10.0,16.0]],[[2.0,1.0,8.98],[2.0,2.0,16.0]]],&[[[6.0,9.0,8.98],[6.0,10.0,16.0]],[[2.0,1.0,8.98],[2.0,2.0,16.0]]]],
 (true,true,3)=>[&[[[6.0,10.0,9.0],[10.0,14.0,16.0]],[[2.0,2.0,9.0],[6.0,6.0,16.0]],[[10.0,2.0,9.0],[14.0,6.0,16.0]]],&[[[1.0,9.0,9.0],[15.0,10.0,16.0]],[[1.0,1.0,9.0],[7.0,2.0,16.0]],[[9.0,1.0,9.0],[15.0,2.0,16.0]]],&[[[7.0,1.0,8.98],[9.0,7.0,16.0]],[[2.0,1.0,8.98],[2.0,2.0,16.0]],[[10.0,1.0,8.98],[10.0,2.0,16.0]]],&[[[7.0,1.0,8.98],[9.0,1.0,16.0]],[[2.0,1.0,8.98],[2.0,2.0,16.0]],[[10.0,1.0,8.98],[10.0,2.0,16.0]]]],
-_=>areas(false,half,1),
-}}
+_ => return None,
+})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drawer_areas;
+
+    #[test]
+    fn skips_saved_layouts_that_do_not_match_the_drawer() {
+        let single = "storagedrawers:oak_full_drawers_1";
+        let quad = "storagedrawers:oak_full_drawers_4";
+        assert!(drawer_areas(single, false, false, 4).is_none());
+        assert!(drawer_areas(quad, false, false, 1).is_none());
+        assert!(drawer_areas(single, true, false, 1).is_none());
+        assert!(drawer_areas(single, false, true, 1).is_none());
+        assert!(drawer_areas(quad, false, false, 4).is_some());
+    }
+
+    #[test]
+    fn accepts_empty_and_partially_seeded_compacting_drawers() {
+        let panel = "storagedrawers:framed_compacting_half_drawers_3";
+        assert!(drawer_areas(panel, true, false, 1).is_some());
+        for count in 1..=3 {
+            assert!(drawer_areas(panel, true, true, count).is_some());
+        }
+        assert!(drawer_areas(panel, true, true, 4).is_none());
+        assert!(drawer_areas(panel, true, false, 2).is_none());
+    }
+}
